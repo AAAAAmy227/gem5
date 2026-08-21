@@ -267,6 +267,27 @@ RoutingUnit::outportComputeCustom(RouteInfo route,
                                  int inport,
                                  PortDirection inport_dirn)
 {
+    PortDirection outport_dirn = "Unknown";
+    int my_id = m_router->get_id();
+    int dest_id = route.dest_router;
+    int num_routers = m_router->get_net_ptr()->getNumCols();
+    int cw_dist = (dest_id - my_id + num_routers)%num_routers; //clockwise
+    int ccw_dist = (my_id - dest_id + num_routers)%num_routers; //counterclockwise
+    assert(!(cw_dist == 0 && ccw_dist == 0));
+    assert(cw_dist+ccw_dist == num_routers);
+    if (cw_dist <= ccw_dist) 
+    {
+        assert(inport_dirn == "Local" || inport_dirn == "Up");
+        outport_dirn = "Down";
+    }
+    else
+    {
+        assert(inport_dirn == "Local" || inport_dirn == "Down");
+        outport_dirn = "Up";
+    }
+
+    return m_outports_dirn2idx[outport_dirn];
+    
     panic("%s placeholder executed", __FUNCTION__);
 }
 
