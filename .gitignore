@@ -33,3 +33,6 @@ configs/dram/lowp_sweep.cfg
 .pyenv
 .vscode
 .venv
+
+/labs
+/network_stats.txt
