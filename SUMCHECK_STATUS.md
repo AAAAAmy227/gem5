@@ -10,11 +10,12 @@
   for the current-branch build, ordinary Mesh smoke, and Lab3 Ring smoke.
   Wormhole has a separate last commit, `61eb8c18beeb013d5d3c320cfa0014bed2809d19`,
   which is not an ancestor of the current `sumcheck` HEAD.
-- **Latest Sumcheck checkpoint commit:** NONE
-- **Checkpoint state:** **UNCOMMITTED** — Phase-0 documentation-only changes;
-  commit/push were not authorized.
-- **Current HEAD:** `86686aa3b4e015fc961c9f41e27af4e2dfef8096`
-  (`modify gitignore`, 2026-08-26T22:00:06+08:00)
+- **Latest Sumcheck checkpoint commit:** `9804d7f938fdea70ca0b5f7f4e16eb9d2d026e4f`
+  (`sumcheck: document phase 00 reconnaissance`).
+- **Checkpoint state:** **COMMITTED LOCALLY; NOT PUSHED** — authorized
+  documentation-only Phase-0 checkpoint.
+- **Current HEAD after the Phase-0 evidence checkpoint:**
+  `9804d7f938fdea70ca0b5f7f4e16eb9d2d026e4f`.
 - **Current branch:** `sumcheck`
 - **Upstream branch:** `origin/sumcheck`; HEAD matched upstream at run start.
 - **Git remote(s):**
@@ -36,13 +37,14 @@
 
 `Phase status` and `Checkpoint state` are separate. Phase 0 passes because
 all repository-specific APIs and the baseline/blockers are now concrete; its
-documentation remains uncommitted.
+documentation is committed locally and its network-code baseline remains the
+separately tested commit listed above.
 
 ## Phase tracker
 
 | Phase | Scope | Status | Checkpoint commit | Acceptance evidence |
 |---|---|---|---|---|
-| 00 | Repository/API/reference reconnaissance | **PASS** | — (uncommitted) | `docs/sumcheck_api_map.md`; `docs/sumcheck_reference_map.md`; build and smoke outputs under `m5out/sumcheck_recon/` |
+| 00 | Repository/API/reference reconnaissance | **PASS** | `9804d7f` (local only) | `docs/sumcheck_api_map.md`; `docs/sumcheck_reference_map.md`; build and smoke outputs under `m5out/sumcheck_recon/` |
 | 01 | Topology + deterministic routing | NOT STARTED | — | API no longer guessed; exact first step recorded below |
 | 02 | Adaptive routing + VC discipline + CDG | BLOCKED ON 01 | — | Output credit/allocation APIs mapped; no implementation |
 | 03 | Causal Sumcheck workload + aggregation | BLOCKED ON 02 | — | NI arrival boundary and workload mismatch mapped; no implementation |
@@ -70,7 +72,7 @@ documentation remains uncommitted.
 | Initial current-branch baseline | pre-Sumcheck | `86686aa3b4e015fc961c9f41e27af4e2dfef8096` | local = `origin/sumcheck` at entry | current build PASS; Mesh single-packet PASS; Ring single-packet PASS | Known-good only for current build/Mesh/Ring scope |
 | Lab3 Ring historical checkpoint | pre-Sumcheck | `3776811c288ed9d1f08caa04a8fa8975b106f7f5` | ancestor of current branch | current Ring smoke PASS | Adds `Ring.py` and custom routing algorithm 2 |
 | Lab3 Wormhole historical checkpoint | pre-Sumcheck | `61eb8c18beeb013d5d3c320cfa0014bed2809d19` | `wormhole` / `origin/wormhole`, not current branch | historical ignored results exist; current-branch run blocked | Must not be overwritten when allocator/NI code changes later |
-| Phase 00 | 00 | — | documentation uncommitted; not pushed | recon/build/baselines recorded here | Commit optional and not authorized |
+| Phase 00 | 00 | `9804d7f938fdea70ca0b5f7f4e16eb9d2d026e4f` | committed locally; not pushed | recon/build/baselines recorded here | Documentation-only checkpoint; no Phase-1 code |
 | Phase 01 | 01 | — | — | — | Not started |
 | Phase 02 | 02 | — | — | — | — |
 | Phase 03 | 03 | — | — | — | — |
@@ -323,18 +325,21 @@ grep -n "[[:blank:]]$" SUMCHECK_STATUS.md docs/sumcheck_api_map.md \
   docs/sumcheck_reference_map.md
 ```
 
-Result after the final documentation rewrite: only the exact untracked
+Result before the authorized checkpoint commit: only the exact untracked
 documentation/task files listed above; no tracked diff, no staged files, and
-no trailing whitespace in the three Phase-0 documents.
+no trailing whitespace in the three Phase-0 documents. The three Phase-0
+documents were then staged explicitly and committed as `9804d7f`; no unrelated
+untracked task material was staged.
 
 ## Git actions actually performed
 
 ```text
-<none>
+git add -- SUMCHECK_STATUS.md docs/sumcheck_api_map.md docs/sumcheck_reference_map.md
+git commit -m "sumcheck: document phase 00 reconnaissance"
 ```
 
-No `git add`, commit, push, branch switch, merge, cherry-pick, rebase, reset,
-restore, or clean was performed.
+No push, branch switch, merge, cherry-pick, rebase, reset, restore, or clean
+was performed.
 
 ## Current blockers / unresolved risks
 
