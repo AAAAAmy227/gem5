@@ -131,6 +131,12 @@ class InputUnit : public Consumer
         return virtualChannels[invc].isReady(curTime);
     }
 
+    inline bool
+    isEmpty(int invc)
+    {
+        return virtualChannels[invc].isEmpty();
+    }
+
     flitBuffer* getCreditQueue() { return &creditQueue; }
 
     inline void

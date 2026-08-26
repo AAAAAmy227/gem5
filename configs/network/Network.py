@@ -88,6 +88,13 @@ def define_options(parser):
             inside garnet network.""",
     )
     parser.add_argument(
+        "--wormhole",
+        action="store_true",
+        default=False,
+        help="""enable single-VC wormhole mode. In this mode,
+            --vcs-per-vnet specifies the depth of the VC.""",
+    )
+    parser.add_argument(
         "--routing-algorithm",
         action="store",
         type=int,
@@ -165,7 +172,15 @@ def init_network(options, network, InterfaceClass):
 
     if options.network == "garnet":
         network.num_rows = options.mesh_rows
-        network.vcs_per_vnet = options.vcs_per_vnet
+        if options.vcs_per_vnet < 1:
+            fatal("--vcs-per-vnet must be at least 1")
+        if options.wormhole:
+            network.wormhole = True
+            network.vcs_per_vnet = 1
+            network.buffers_per_data_vc = options.vcs_per_vnet
+            network.buffers_per_ctrl_vc = options.vcs_per_vnet
+        else:
+            network.vcs_per_vnet = options.vcs_per_vnet
         network.ni_flit_size = options.link_width_bits / 8
         network.routing_algorithm = options.routing_algorithm
         network.garnet_deadlock_threshold = options.garnet_deadlock_threshold

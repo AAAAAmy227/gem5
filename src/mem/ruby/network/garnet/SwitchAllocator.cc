@@ -31,6 +31,7 @@
 
 #include "mem/ruby/network/garnet/SwitchAllocator.hh"
 
+#include "base/logging.hh"
 #include "debug/RubyNetwork.hh"
 #include "mem/ruby/network/garnet/GarnetNetwork.hh"
 #include "mem/ruby/network/garnet/InputUnit.hh"
@@ -110,6 +111,9 @@ SwitchAllocator::wakeup()
 void
 SwitchAllocator::arbitrate_inports()
 {
+    const bool wormhole =
+        m_router->get_net_ptr()->isWormholeEnabled();
+
     // Select a VC from each input in a round robin manner
     // Independent arbiter at each input port
     for (int inport = 0; inport < m_num_inports; inport++) {
@@ -121,8 +125,15 @@ SwitchAllocator::arbitrate_inports()
             if (input_unit->need_stage(invc, SA_, curTick())) {
                 // This flit is in SA stage
 
-                int outport = input_unit->get_outport(invc);
-                int outvc = input_unit->get_outvc(invc);
+                flit *t_flit = input_unit->peekTopFlit(invc);
+                panic_if(wormhole &&
+                         t_flit->get_type() != HEAD_TAIL_,
+                    "Wormhole mode only supports single-flit packets");
+
+                int outport = wormhole ? t_flit->get_outport() :
+                    input_unit->get_outport(invc);
+                int outvc = wormhole ? -1 :
+                    input_unit->get_outvc(invc);
 
                 // check if the flit in this InputVC is allowed to be sent
                 // send_allowed conditions described in that function.
@@ -162,6 +173,9 @@ SwitchAllocator::arbitrate_inports()
 void
 SwitchAllocator::arbitrate_outports()
 {
+    const bool wormhole =
+        m_router->get_net_ptr()->isWormholeEnabled();
+
     // Now there are a set of input vc requests for output vcs.
     // Again do round robin arbitration on these requests
     // Independent arbiter at each output port
@@ -179,10 +193,17 @@ SwitchAllocator::arbitrate_outports()
                 // grant this outport to this inport
                 int invc = m_vc_winners[inport];
 
-                int outvc = input_unit->get_outvc(invc);
-                if (outvc == -1) {
-                    // VC Allocation - select any free VC from outport
-                    outvc = vc_allocate(outport, inport, invc);
+                int outvc = -1;
+                if (wormhole) {
+                    outvc = output_unit->select_vc_for_wormhole(
+                        get_vnet(invc));
+                    assert(outvc != -1);
+                } else {
+                    outvc = input_unit->get_outvc(invc);
+                    if (outvc == -1) {
+                        // VC Allocation - select any free VC from outport
+                        outvc = vc_allocate(outport, inport, invc);
+                    }
                 }
 
                 // remove flit from Input VC
@@ -221,7 +242,14 @@ SwitchAllocator::arbitrate_outports()
                 m_router->grant_switch(inport, t_flit);
                 m_output_arbiter_activity++;
 
-                if ((t_flit->get_type() == TAIL_) ||
+                if (wormhole) {
+                    assert(t_flit->get_type() == HEAD_TAIL_);
+                    bool vc_empty = input_unit->isEmpty(invc);
+                    if (vc_empty)
+                        input_unit->set_vc_idle(invc, curTick());
+                    input_unit->increment_credit(
+                        invc, vc_empty, curTick());
+                } else if ((t_flit->get_type() == TAIL_) ||
                     t_flit->get_type() == HEAD_TAIL_) {
 
                     // This Input VC should now be empty
@@ -288,30 +316,38 @@ SwitchAllocator::send_allowed(int inport, int invc, int outport, int outvc)
     // Check if ordering violated (in ordered vnet)
 
     int vnet = get_vnet(invc);
-    bool has_outvc = (outvc != -1);
-    bool has_credit = false;
+    const bool wormhole =
+        m_router->get_net_ptr()->isWormholeEnabled();
 
     auto output_unit = m_router->getOutputUnit(outport);
-    if (!has_outvc) {
-
-        // needs outvc
-        // this is only true for HEAD and HEAD_TAIL flits.
-
-        if (output_unit->has_free_vc(vnet)) {
-
-            has_outvc = true;
-
-            // each VC has at least one buffer,
-            // so no need for additional credit check
-            has_credit = true;
-        }
+    if (wormhole) {
+        if (!output_unit->has_credit_for_wormhole(vnet))
+            return false;
     } else {
-        has_credit = output_unit->has_credit(outvc);
-    }
+        bool has_outvc = (outvc != -1);
+        bool has_credit = false;
 
-    // cannot send if no outvc or no credit.
-    if (!has_outvc || !has_credit)
-        return false;
+        if (!has_outvc) {
+
+            // needs outvc
+            // this is only true for HEAD and HEAD_TAIL flits.
+
+            if (output_unit->has_free_vc(vnet)) {
+
+                has_outvc = true;
+
+                // each VC has at least one buffer,
+                // so no need for additional credit check
+                has_credit = true;
+            }
+        } else {
+            has_credit = output_unit->has_credit(outvc);
+        }
+
+        // cannot send if no outvc or no credit.
+        if (!has_outvc || !has_credit)
+            return false;
+    }
 
 
     // protocol ordering check

@@ -70,6 +70,12 @@ class VirtualChannel
         return inputBuffer.isReady(curTime);
     }
 
+    inline bool
+    isEmpty()
+    {
+        return inputBuffer.isEmpty();
+    }
+
     inline void
     insertFlit(flit *t_flit)
     {

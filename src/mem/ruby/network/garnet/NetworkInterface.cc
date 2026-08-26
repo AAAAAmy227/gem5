@@ -89,6 +89,8 @@ NetworkInterface::addOutPort(NetworkLink *out_link,
     outPorts.push_back(newOutPort);
 
     assert(consumerVcs > 0);
+    fatal_if(m_net_ptr->isWormholeEnabled() && consumerVcs != 1,
+        "%s: Wormhole mode requires exactly one VC per vnet\n", name());
     // We are not allowing different physical links to have different vcs
     // If it is required that the Network Interface support different VCs
     // for every physical link connected to it. Then they need to change
@@ -381,6 +383,9 @@ NetworkInterface::flitisizeMessage(MsgPtr msg_ptr, int vnet)
     int num_flits = (int)divCeil((float) m_net_ptr->MessageSizeType_to_int(
         net_msg_ptr->getMessageSize()), (float)oPort->bitWidth());
 
+    panic_if(m_net_ptr->isWormholeEnabled() && num_flits != 1,
+        "Wormhole mode only supports single-flit packets");
+
     DPRINTF(RubyNetwork, "Message Size:%d vnet:%d bitWidth:%d\n",
         m_net_ptr->MessageSizeType_to_int(net_msg_ptr->getMessageSize()),
         vnet, oPort->bitWidth());
@@ -394,6 +399,7 @@ NetworkInterface::flitisizeMessage(MsgPtr msg_ptr, int vnet)
         if (vc == -1) {
             return false ;
         }
+        bool vc_was_empty = niOutVcs[vc].isEmpty();
         MsgPtr new_msg_ptr = msg_ptr->clone();
         NodeID destID = dest_nodes[ctr];
 
@@ -449,7 +455,8 @@ NetworkInterface::flitisizeMessage(MsgPtr msg_ptr, int vnet)
             niOutVcs[vc].insert(fl);
         }
 
-        m_ni_out_vcs_enqueue_time[vc] = curTick();
+        if (vc_was_empty)
+            m_ni_out_vcs_enqueue_time[vc] = curTick();
         outVcState[vc].setState(ACTIVE_, curTick());
     }
     return true ;
@@ -465,10 +472,13 @@ NetworkInterface::calculateVC(int vnet)
         if (m_vc_allocator[vnet] == m_vc_per_vnet)
             m_vc_allocator[vnet] = 0;
 
-        if (outVcState[(vnet*m_vc_per_vnet) + delta].isInState(
-                    IDLE_, curTick())) {
+        int vc = (vnet*m_vc_per_vnet) + delta;
+        bool available = m_net_ptr->isWormholeEnabled() ?
+            outVcState[vc].has_credit() :
+            outVcState[vc].isInState(IDLE_, curTick());
+        if (available) {
             vc_busy_counter[vnet] = 0;
-            return ((vnet*m_vc_per_vnet) + delta);
+            return vc;
         }
     }
 
@@ -529,7 +539,12 @@ NetworkInterface::scheduleOutputPort(OutputPort *oPort)
 
                if (t_flit->get_type() == TAIL_ ||
                   t_flit->get_type() == HEAD_TAIL_) {
-                   m_ni_out_vcs_enqueue_time[vc] = Tick(INFINITE_);
+                   if (niOutVcs[vc].isEmpty()) {
+                       m_ni_out_vcs_enqueue_time[vc] = Tick(INFINITE_);
+                   } else {
+                       m_ni_out_vcs_enqueue_time[vc] =
+                           niOutVcs[vc].peekTopFlit()->get_enqueue_time();
+                   }
                }
 
                // Done with this port, continue to schedule

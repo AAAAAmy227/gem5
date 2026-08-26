@@ -31,6 +31,7 @@
 
 #include "mem/ruby/network/garnet/InputUnit.hh"
 
+#include "base/logging.hh"
 #include "debug/RubyNetwork.hh"
 #include "mem/ruby/network/garnet/Credit.hh"
 #include "mem/ruby/network/garnet/Router.hh"
@@ -89,18 +90,34 @@ InputUnit::wakeup()
 
         if ((t_flit->get_type() == HEAD_) ||
             (t_flit->get_type() == HEAD_TAIL_)) {
-
-            assert(virtualChannels[vc].get_state() == IDLE_);
-            set_vc_active(vc, curTick());
+            const bool wormhole =
+                m_router->get_net_ptr()->isWormholeEnabled();
+            if (wormhole) {
+                panic_if(t_flit->get_type() != HEAD_TAIL_,
+                    "Wormhole mode only supports single-flit packets");
+                panic_if(virtualChannels[vc].get_state() != IDLE_ &&
+                         virtualChannels[vc].get_state() != ACTIVE_,
+                    "Invalid VC state in wormhole mode");
+                if (virtualChannels[vc].get_state() == IDLE_)
+                    set_vc_active(vc, curTick());
+            } else {
+                assert(virtualChannels[vc].get_state() == IDLE_);
+                set_vc_active(vc, curTick());
+            }
 
             // Route computation for this vc
             int outport = m_router->route_compute(t_flit->get_route(),
                 m_id, m_direction);
 
-            // Update output port in VC
-            // All flits in this packet will use this output port
-            // The output port field in the flit is updated after it wins SA
-            grant_outport(vc, outport);
+            if (wormhole) {
+                // A wormhole VC can contain independent single-flit packets,
+                // so routing metadata belongs to each flit rather than the VC.
+                t_flit->set_outport(outport);
+            } else {
+                // All flits in a normal packet use the output port stored
+                // in the input VC.
+                grant_outport(vc, outport);
+            }
 
         } else {
             assert(virtualChannels[vc].get_state() == ACTIVE_);

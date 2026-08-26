@@ -69,6 +69,7 @@ GarnetNetwork::GarnetNetwork(const Params &p)
     m_max_vcs_per_vnet = 0;
     m_buffers_per_data_vc = p.buffers_per_data_vc;
     m_buffers_per_ctrl_vc = p.buffers_per_ctrl_vc;
+    m_wormhole_enabled = p.wormhole;
     m_routing_algorithm = p.routing_algorithm;
     m_next_packet_id = 0;
 
@@ -120,6 +121,7 @@ GarnetNetwork::init()
     // parent network constructor
     assert(m_topology_ptr != NULL);
     m_topology_ptr->createLinks(this);
+    assert(!m_wormhole_enabled || m_max_vcs_per_vnet == 1);
 
     // Initialize topology specific parameters
     if (getNumRows() > 0) {
