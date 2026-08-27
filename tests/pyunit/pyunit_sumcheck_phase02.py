@@ -27,6 +27,7 @@ from topologies.SumcheckConfig import (  # noqa: E402
 from sumcheck_cdg import (  # noqa: E402
     check_configuration,
     enumerate_legal_routes,
+    enumerate_runtime_routes,
     validate_route_phases,
 )
 
@@ -148,17 +149,39 @@ class VcDisciplineTests(unittest.TestCase):
 class CdgTests(unittest.TestCase):
     def test_required_counts_and_positive_negative_controls(self):
         expected = {1: 4692, 2: 14548, 4: 52692}
+        expected_runtime_adaptive = {1: 4692, 2: 8084, 4: 14868}
         for entries in (1, 2, 4):
             with self.subTest(entries=entries):
                 report = check_configuration(entries, STAGGERED)
                 self.assertEqual(report["ordered_pairs"], 4692)
                 self.assertEqual(report["legal_routes"], expected[entries])
+                self.assertEqual(report["runtime_fixed_routes"], 4692)
+                self.assertEqual(
+                    report["runtime_adaptive_routes"],
+                    expected_runtime_adaptive[entries],
+                )
+                self.assertTrue(report["runtime_relation_is_subset"])
+                self.assertTrue(report["runtime_fixed_separated_acyclic"])
+                self.assertTrue(report["runtime_adaptive_separated_acyclic"])
                 self.assertTrue(report["separated_acyclic"])
                 if entries in (2, 4):
                     self.assertFalse(report["collapsed_acyclic"])
                     witness = report["collapsed_cycle_witness"]
                     self.assertGreaterEqual(len(witness), 3)
                     self.assertEqual(witness[0], witness[-1])
+
+    def test_exact_runtime_relation_uses_fixed_source_entry(self):
+        for entries in (1, 2, 4):
+            fixed = tuple(
+                enumerate_runtime_routes(entries, STAGGERED, adaptive=False)
+            )
+            adaptive = tuple(
+                enumerate_runtime_routes(entries, STAGGERED, adaptive=True)
+            )
+            self.assertEqual(len(fixed), 4692)
+            self.assertGreaterEqual(len(adaptive), len(fixed))
+            for route in adaptive:
+                validate_route_phases(route)
 
     def test_all_legal_mesh_segments_remain_dim0_then_dim1(self):
         for entries in (1, 2, 4):

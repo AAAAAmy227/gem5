@@ -1,11 +1,17 @@
 #!/usr/bin/env python3
 """Independent Sumcheck legal-route and channel-dependency checker.
 
-The specification's Phase-2 route totals enumerate every legal static source
-entry assignment and every legal adaptive destination entry choice. Runtime
-source routing remains the fixed nearest assignment; this conservative CDG
-superset is intentional and makes the documented p^2 cross-cluster totals
-explicit instead of adding source-side runtime adaptivity.
+Two relations are checked deliberately:
+
+* the exact C++ fixed/adaptive relation, whose source entry is always the
+  fixed nearest entry and whose destination entry is either nearest (fixed) or
+  any legal candidate (adaptive); and
+* the specification-counted conservative relation, which additionally allows
+  every source entry and therefore has the documented 4692/14548/52692 route
+  totals.
+
+The latter is a strict CDG superset for p=2/4, not a claim about runtime
+source-side adaptivity. Both must be acyclic with separated U/D resources.
 """
 
 import argparse
@@ -31,6 +37,7 @@ from topologies.SumcheckConfig import (  # noqa: E402
     is_gateway,
     is_root,
     is_worker,
+    nearest_entry_index,
     physical_adjacency,
     route_vc_class,
     worker_cluster,
@@ -138,7 +145,38 @@ def _build_route(
 
 
 def enumerate_legal_routes(entries_per_cluster, placement=STAGGERED):
-    """Enumerate the specification's full assignment/adaptive relation."""
+    """Enumerate the specification-counted conservative route relation."""
+
+    yield from _enumerate_routes(
+        entries_per_cluster,
+        placement,
+        source_policy="all",
+        destination_policy="all",
+    )
+
+
+def enumerate_runtime_routes(
+    entries_per_cluster, placement=STAGGERED, adaptive=True
+):
+    """Enumerate exactly the fixed-source relation implemented by C++."""
+
+    yield from _enumerate_routes(
+        entries_per_cluster,
+        placement,
+        source_policy="nearest",
+        destination_policy="all" if adaptive else "nearest",
+    )
+
+
+def _enumerate_routes(
+    entries_per_cluster, placement, source_policy, destination_policy
+):
+    if source_policy not in ("all", "nearest"):
+        raise ValueError(f"unknown source-entry policy {source_policy}")
+    if destination_policy not in ("all", "nearest"):
+        raise ValueError(
+            f"unknown destination-entry policy {destination_policy}"
+        )
 
     adjacency = physical_adjacency(entries_per_cluster, placement)
     for source in range(NUM_ROUTERS):
@@ -150,16 +188,28 @@ def enumerate_legal_routes(entries_per_cluster, placement=STAGGERED):
                 and is_worker(destination)
                 and worker_cluster(source) == worker_cluster(destination)
             )
-            source_entries = (
-                range(entries_per_cluster)
-                if is_worker(source) and not same_cluster_workers
-                else (None,)
-            )
-            destination_entries = (
-                range(entries_per_cluster)
-                if is_worker(destination) and not same_cluster_workers
-                else (None,)
-            )
+            source_entries = (None,)
+            if is_worker(source) and not same_cluster_workers:
+                source_entries = (
+                    range(entries_per_cluster)
+                    if source_policy == "all"
+                    else (
+                        nearest_entry_index(
+                            source, entries_per_cluster, placement
+                        ),
+                    )
+                )
+            destination_entries = (None,)
+            if is_worker(destination) and not same_cluster_workers:
+                destination_entries = (
+                    range(entries_per_cluster)
+                    if destination_policy == "all"
+                    else (
+                        nearest_entry_index(
+                            destination, entries_per_cluster, placement
+                        ),
+                    )
+                )
             for source_entry in source_entries:
                 for destination_entry in destination_entries:
                     routers = tuple(
@@ -249,13 +299,41 @@ def _json_resource(resource, collapsed):
 
 def check_configuration(entries_per_cluster, placement=STAGGERED):
     routes = tuple(enumerate_legal_routes(entries_per_cluster, placement))
+    runtime_fixed = tuple(
+        enumerate_runtime_routes(
+            entries_per_cluster, placement, adaptive=False
+        )
+    )
+    runtime_adaptive = tuple(
+        enumerate_runtime_routes(
+            entries_per_cluster, placement, adaptive=True
+        )
+    )
     separated_cycle = find_cycle(build_cdg(routes, collapsed=False))
     collapsed_cycle = find_cycle(build_cdg(routes, collapsed=True))
+    runtime_fixed_separated = find_cycle(
+        build_cdg(runtime_fixed, collapsed=False)
+    )
+    runtime_adaptive_separated = find_cycle(
+        build_cdg(runtime_adaptive, collapsed=False)
+    )
+    runtime_adaptive_collapsed = find_cycle(
+        build_cdg(runtime_adaptive, collapsed=True)
+    )
+    spec_route_set = {
+        (route.source, route.destination, route.routers, route.classes)
+        for route in routes
+    }
+    runtime_route_set = {
+        (route.source, route.destination, route.routers, route.classes)
+        for route in runtime_adaptive
+    }
     return {
         "entries_per_cluster": entries_per_cluster,
         "placement": placement,
         "ordered_pairs": NUM_ROUTERS * (NUM_ROUTERS - 1),
         "legal_routes": len(routes),
+        "relation": "specification_conservative_superset",
         "separated_acyclic": separated_cycle is None,
         "separated_cycle_witness": None
         if separated_cycle is None
@@ -264,6 +342,21 @@ def check_configuration(entries_per_cluster, placement=STAGGERED):
         "collapsed_cycle_witness": None
         if collapsed_cycle is None
         else [_json_resource(item, True) for item in collapsed_cycle],
+        "runtime_fixed_routes": len(runtime_fixed),
+        "runtime_adaptive_routes": len(runtime_adaptive),
+        "runtime_relation": "exact_cpp_fixed_source_entry",
+        "runtime_relation_is_subset": runtime_route_set <= spec_route_set,
+        "runtime_fixed_separated_acyclic": runtime_fixed_separated is None,
+        "runtime_adaptive_separated_acyclic": runtime_adaptive_separated is None,
+        "runtime_adaptive_collapsed_acyclic": (
+            runtime_adaptive_collapsed is None
+        ),
+        "runtime_adaptive_collapsed_cycle_witness": None
+        if runtime_adaptive_collapsed is None
+        else [
+            _json_resource(item, True)
+            for item in runtime_adaptive_collapsed
+        ],
     }
 
 
@@ -291,12 +384,23 @@ def main():
 
     reports = [check_configuration(p, args.placement) for p in (1, 2, 4)]
     expected_routes = {1: 4692, 2: 14548, 4: 52692}
+    expected_runtime_adaptive = {1: 4692, 2: 8084, 4: 14868}
     for report in reports:
         p = report["entries_per_cluster"]
         if report["ordered_pairs"] != 4692:
             raise SystemExit("ordered-pair count mismatch")
         if report["legal_routes"] != expected_routes[p]:
             raise SystemExit(f"p={p} legal-route count mismatch")
+        if report["runtime_fixed_routes"] != 4692:
+            raise SystemExit(f"p={p} runtime fixed-route count mismatch")
+        if report["runtime_adaptive_routes"] != expected_runtime_adaptive[p]:
+            raise SystemExit(f"p={p} runtime adaptive-route count mismatch")
+        if not report["runtime_relation_is_subset"]:
+            raise SystemExit(f"p={p} runtime relation escaped spec superset")
+        if not report["runtime_fixed_separated_acyclic"]:
+            raise SystemExit(f"p={p} runtime fixed CDG is cyclic")
+        if not report["runtime_adaptive_separated_acyclic"]:
+            raise SystemExit(f"p={p} runtime adaptive CDG is cyclic")
         if not report["separated_acyclic"]:
             raise SystemExit(f"p={p} separated CDG is cyclic")
         if p in (2, 4) and report["collapsed_acyclic"]:
@@ -306,7 +410,9 @@ def main():
             item["channel"] for item in witness
         )
         print(
-            f"p={p}: pairs=4692 routes={report['legal_routes']} "
+            f"p={p}: pairs=4692 spec_routes={report['legal_routes']} "
+            f"runtime_fixed={report['runtime_fixed_routes']} "
+            f"runtime_adaptive={report['runtime_adaptive_routes']} "
             f"separated=acyclic collapsed_witness={witness_text}"
         )
 
