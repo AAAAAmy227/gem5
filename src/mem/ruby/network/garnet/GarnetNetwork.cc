@@ -74,6 +74,8 @@ GarnetNetwork::GarnetNetwork(const Params &p)
     m_routing_algorithm = p.routing_algorithm;
     m_entries_per_cluster = p.entries_per_cluster;
     m_entry_placement = p.entry_placement;
+    m_sumcheck_adaptive = p.sumcheck_adaptive;
+    m_entry_congestion_weight = p.entry_congestion_weight;
     m_next_packet_id = 0;
 
     if (m_routing_algorithm == SUMCHECK_) {
@@ -85,6 +87,11 @@ GarnetNetwork::GarnetNetwork(const Params &p)
                                                     corners),
                  "Invalid Sumcheck entry configuration p=%u placement=%s",
                  m_entries_per_cluster, m_entry_placement.c_str());
+        fatal_if(p.vcs_per_vnet < 4,
+                 "Sumcheck routing requires at least 4 VCs per vnet; got %u",
+                 p.vcs_per_vnet);
+        fatal_if(m_entry_congestion_weight < 0.0,
+                 "Sumcheck entry congestion weight must be non-negative");
     }
 
     m_enable_fault_model = p.enable_fault_model;
@@ -341,6 +348,20 @@ GarnetNetwork::makeInternalLink(SwitchID src, SwitchID dest, BasicLink* link,
 
     m_networklinks.push_back(net_link);
     m_creditlinks.push_back(credit_link);
+
+    if (m_routing_algorithm == SUMCHECK_) {
+        const bool gateway_entry =
+            (sumcheck::isGateway(src) && sumcheck::isWorker(dest)) ||
+            (sumcheck::isWorker(src) && sumcheck::isGateway(dest));
+        const bool root_gateway =
+            (sumcheck::isRoot(src) && sumcheck::isGateway(dest)) ||
+            (sumcheck::isGateway(src) && sumcheck::isRoot(dest));
+        if (gateway_entry || root_gateway) {
+            m_sumcheck_tracked_links.push_back(net_link);
+            m_sumcheck_tracked_link_names.push_back(
+                csprintf("r%d_to_r%d", src, dest));
+        }
+    }
 
     m_max_vcs_per_vnet = std::max(m_max_vcs_per_vnet,
                              std::max(m_routers[dest]->get_vc_per_vnet(),
@@ -599,6 +620,94 @@ GarnetNetwork::regStats()
             statistics::units::Count, statistics::units::Cycle>::get())
         ;
 
+    const int entry_stat_slots = sumcheck::NumClusters * 4;
+    m_sumcheck_gateway_entry_choices
+        .init(entry_stat_slots)
+        .name(name() + ".sumcheck_gateway_entry_choices")
+        .flags(statistics::pdf | statistics::total | statistics::nozero |
+               statistics::oneline)
+        .unit(statistics::units::Count::get())
+        ;
+    m_sumcheck_candidate_evaluations
+        .init(entry_stat_slots)
+        .name(name() + ".sumcheck_candidate_evaluations")
+        .flags(statistics::nozero)
+        .unit(statistics::units::Count::get())
+        ;
+    m_sumcheck_candidate_credit_sum
+        .init(entry_stat_slots)
+        .name(name() + ".sumcheck_candidate_credit_sum")
+        .flags(statistics::nozero)
+        .unit(statistics::units::Count::get())
+        ;
+    m_sumcheck_candidate_occupancy_sum
+        .init(entry_stat_slots)
+        .name(name() + ".sumcheck_candidate_occupancy_sum")
+        .flags(statistics::nozero)
+        .unit(statistics::units::Count::get())
+        ;
+    m_sumcheck_candidate_capacity_sum
+        .init(entry_stat_slots)
+        .name(name() + ".sumcheck_candidate_capacity_sum")
+        .flags(statistics::nozero)
+        .unit(statistics::units::Count::get())
+        ;
+    for (int gateway = 0; gateway < sumcheck::NumClusters; ++gateway) {
+        for (int entry = 0; entry < 4; ++entry) {
+            const int slot = gateway * 4 + entry;
+            const std::string label = csprintf("g%d.entry%d", gateway, entry);
+            m_sumcheck_gateway_entry_choices.subname(slot, label);
+            m_sumcheck_candidate_evaluations.subname(slot, label);
+            m_sumcheck_candidate_credit_sum.subname(slot, label);
+            m_sumcheck_candidate_occupancy_sum.subname(slot, label);
+            m_sumcheck_candidate_capacity_sum.subname(slot, label);
+        }
+    }
+    m_sumcheck_gateway_entry_selections
+        .name(name() + ".sumcheck_gateway_entry_selections")
+        .unit(statistics::units::Count::get())
+        ;
+    m_sumcheck_fixed_choice_mismatches
+        .name(name() + ".sumcheck_fixed_choice_mismatches")
+        .unit(statistics::units::Count::get())
+        ;
+    m_sumcheck_tie_arbitrations
+        .name(name() + ".sumcheck_tie_arbitrations")
+        .unit(statistics::units::Count::get())
+        ;
+    m_sumcheck_adaptive_reroute_rate
+        .name(name() + ".sumcheck_adaptive_reroute_rate")
+        .unit(statistics::units::Ratio::get())
+        ;
+    m_sumcheck_adaptive_reroute_rate =
+        m_sumcheck_fixed_choice_mismatches /
+        m_sumcheck_gateway_entry_selections;
+
+    m_sumcheck_vc_allocations
+        .init(2)
+        .name(name() + ".sumcheck_vc_allocations")
+        .flags(statistics::pdf | statistics::total | statistics::nozero |
+               statistics::oneline)
+        .unit(statistics::units::Count::get())
+        ;
+    m_sumcheck_vc_allocations.subname(0, "U");
+    m_sumcheck_vc_allocations.subname(1, "D");
+
+    const int tracked_link_stat_slots = std::max(
+        1, static_cast<int>(m_sumcheck_tracked_links.size()));
+    m_sumcheck_tracked_link_flits
+        .init(tracked_link_stat_slots)
+        .name(name() + ".sumcheck_tracked_link_flits")
+        .flags(statistics::nozero)
+        .unit(statistics::units::Count::get())
+        ;
+    if (m_sumcheck_tracked_link_names.empty())
+        m_sumcheck_tracked_link_flits.subname(0, "none");
+    for (int index = 0; index < m_sumcheck_tracked_link_names.size(); ++index) {
+        m_sumcheck_tracked_link_flits.subname(
+            index, m_sumcheck_tracked_link_names[index]);
+    }
+
     // Traffic distribution
     for (int source = 0; source < m_routers.size(); ++source) {
         m_data_traffic_distribution.push_back(
@@ -649,10 +758,51 @@ GarnetNetwork::collateStats()
         }
     }
 
+    for (int i = 0; i < m_sumcheck_tracked_links.size(); ++i) {
+        m_sumcheck_tracked_link_flits[i] =
+            m_sumcheck_tracked_links[i]->getLinkUtilization();
+    }
+
     // Ask the routers to collate their statistics
     for (int i = 0; i < m_routers.size(); i++) {
         m_routers[i]->collateStats();
     }
+}
+
+void
+GarnetNetwork::recordSumcheckEntryChoice(
+    int gateway, int selected, int fixed, bool tied,
+    const std::vector<int> &credits, const std::vector<int> &capacities)
+{
+    assert(gateway >= 0 && gateway < sumcheck::NumClusters);
+    assert(selected >= 0 && selected < m_entries_per_cluster);
+    assert(credits.size() == m_entries_per_cluster);
+    assert(capacities.size() == m_entries_per_cluster);
+
+    ++m_sumcheck_gateway_entry_selections;
+    ++m_sumcheck_gateway_entry_choices[gateway * 4 + selected];
+    if (selected != fixed)
+        ++m_sumcheck_fixed_choice_mismatches;
+    if (tied)
+        ++m_sumcheck_tie_arbitrations;
+
+    for (int entry = 0; entry < m_entries_per_cluster; ++entry) {
+        const int slot = gateway * 4 + entry;
+        ++m_sumcheck_candidate_evaluations[slot];
+        m_sumcheck_candidate_credit_sum[slot] += credits[entry];
+        m_sumcheck_candidate_capacity_sum[slot] += capacities[entry];
+        m_sumcheck_candidate_occupancy_sum[slot] +=
+            capacities[entry] - credits[entry];
+    }
+}
+
+void
+GarnetNetwork::recordSumcheckVcAllocation(sumcheck::VcClass vc_class)
+{
+    assert(vc_class == sumcheck::VcClass::Up ||
+           vc_class == sumcheck::VcClass::Down);
+    ++m_sumcheck_vc_allocations[
+        vc_class == sumcheck::VcClass::Up ? 0 : 1];
 }
 
 void

@@ -40,6 +40,7 @@
 #include "mem/ruby/network/garnet/CommonTypes.hh"
 #include "mem/ruby/network/garnet/NetworkLink.hh"
 #include "mem/ruby/network/garnet/OutVcState.hh"
+#include "mem/ruby/network/garnet/SumcheckConfig.hh"
 
 namespace gem5
 {
@@ -67,8 +68,12 @@ class OutputUnit : public Consumer
     void decrement_credit(int out_vc);
     void increment_credit(int out_vc);
     bool has_credit(int out_vc);
-    bool has_free_vc(int vnet);
-    int select_free_vc(int vnet);
+    bool has_free_vc(
+        int vnet, sumcheck::VcClass vc_class = sumcheck::VcClass::Any);
+    int select_free_vc(
+        int vnet, sumcheck::VcClass vc_class = sumcheck::VcClass::Any);
+    int free_credits(int vnet, sumcheck::VcClass vc_class);
+    int credit_capacity(int vnet, sumcheck::VcClass vc_class);
 
     inline PortDirection get_direction() { return m_direction; }
 

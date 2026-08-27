@@ -6,6 +6,7 @@ the link descriptions below directly, and ``SumcheckConfig.hh`` is generated
 from :func:`render_cpp_header` and checked byte-for-byte by Phase-1 tests.
 """
 
+from math import isclose
 from typing import NamedTuple
 
 
@@ -20,6 +21,9 @@ NUM_ROUTERS = ROOT_ID + 1
 
 STAGGERED = "staggered"
 CORNERS = "corners"
+
+VC_U = "U"
+VC_D = "D"
 
 ENTRY_PLACEMENTS = {
     (1, STAGGERED): ((1, 1),),
@@ -52,6 +56,15 @@ class LinkSpec(NamedTuple):
     port_a: str
     port_b: str
     latency_class: str
+
+
+class AdaptiveChoice(NamedTuple):
+    """Result of one stable gateway-to-entry route decision."""
+
+    index: int
+    next_tie_pointer: int
+    scores: tuple
+    tied: bool
 
 
 def validate_configuration(entries_per_cluster, entry_placement):
@@ -129,6 +142,107 @@ def nearest_entry_index(worker_router, entries_per_cluster, entry_placement):
             index,
         ),
     )
+
+
+def choose_adaptive_entry(
+    worker_router,
+    entries_per_cluster,
+    entry_placement,
+    free_credits,
+    capacities,
+    congestion_weight=4.0,
+    tie_pointer=0,
+):
+    """Apply the Phase-2 credit score and deterministic rotating tie rule.
+
+    ``free_credits`` and ``capacities`` contain the aggregate state of the
+    two legal VC_D offsets on each candidate gateway output.
+    """
+
+    entries = entry_coordinates(entries_per_cluster, entry_placement)
+    if len(free_credits) != len(entries) or len(capacities) != len(entries):
+        raise ValueError("candidate credit vectors must match entry count")
+    if not 0 <= tie_pointer < len(entries):
+        raise ValueError("tie pointer is outside the entry table")
+    if congestion_weight < 0:
+        raise ValueError("entry congestion weight must be non-negative")
+
+    destination_row, destination_col = worker_coordinate(worker_router)
+    scores = []
+    for index, (entry_row, entry_col) in enumerate(entries):
+        capacity = capacities[index]
+        credits = free_credits[index]
+        if capacity <= 0 or not 0 <= credits <= capacity:
+            raise ValueError("candidate credits must be within capacity")
+        distance = abs(entry_row - destination_row) + abs(
+            entry_col - destination_col
+        )
+        scores.append(
+            distance
+            + congestion_weight * (1.0 - float(credits) / capacity)
+        )
+
+    best_score = min(scores)
+    tied = tuple(
+        index
+        for index, score in enumerate(scores)
+        if isclose(score, best_score, rel_tol=1e-12, abs_tol=1e-12)
+    )
+    if len(tied) == 1:
+        selected = tied[0]
+        next_pointer = tie_pointer
+    else:
+        selected = next(
+            index
+            for step in range(len(entries))
+            for index in ((tie_pointer + step) % len(entries),)
+            if index in tied
+        )
+        next_pointer = (selected + 1) % len(entries)
+
+    return AdaptiveChoice(
+        selected, next_pointer, tuple(scores), len(tied) > 1
+    )
+
+
+def route_vc_class(current, source, destination):
+    """Return the VC class used by the actual router allocation decision."""
+
+    if not all(is_router(router) for router in (current, source, destination)):
+        raise ValueError("VC classification contains an invalid router ID")
+    if source == destination:
+        return VC_U
+
+    if is_root(current):
+        return VC_U if current == destination else VC_D
+
+    if is_gateway(current):
+        cluster = gateway_cluster(current)
+        if is_worker(destination) and worker_cluster(destination) == cluster:
+            return VC_D
+        if current == destination:
+            if is_worker(source) and worker_cluster(source) == cluster:
+                return VC_U
+            return VC_D
+        return VC_U
+
+    if is_worker(current):
+        cluster = worker_cluster(current)
+        if is_worker(destination) and worker_cluster(destination) == cluster:
+            if is_worker(source) and worker_cluster(source) == cluster:
+                return VC_U
+            return VC_D
+        return VC_U
+
+    raise ValueError("unsupported router role for VC classification")
+
+
+def vc_offsets(vc_class):
+    if vc_class == VC_U:
+        return (0, 1)
+    if vc_class == VC_D:
+        return (2, 3)
+    raise ValueError(f"unknown Sumcheck VC class {vc_class}")
 
 
 def entry_router(cluster, index, entries_per_cluster, entry_placement):
@@ -325,6 +439,7 @@ def render_cpp_header():
 
 #include <array>
 #include <cassert>
+#include <limits>
 
 namespace gem5
 {{
@@ -348,6 +463,20 @@ struct Coord
 {{
     int row;
     int col;
+}};
+
+enum class VcClass
+{{
+    Up,
+    Down,
+    Any,
+}};
+
+struct AdaptiveEntryChoice
+{{
+    int index;
+    unsigned next_tie_pointer;
+    bool tied;
 }};
 
 inline constexpr std::array<Coord, 4> EntriesP1 = {{{{{p1}}}}};
@@ -440,6 +569,113 @@ nearestEntryIndex(int worker_id, unsigned count, bool corners)
         }}
     }}
     return best_index;
+}}
+
+inline AdaptiveEntryChoice
+chooseAdaptiveEntry(int worker_id, unsigned count, bool corners,
+                    const std::array<int, 4> &free_credits,
+                    const std::array<int, 4> &capacities,
+                    double congestion_weight, unsigned tie_pointer)
+{{
+    assert(isWorker(worker_id));
+    assert(validEntryConfiguration(count, corners));
+    assert(congestion_weight >= 0.0);
+    assert(tie_pointer < count);
+    const Coord destination = workerCoord(worker_id);
+    const auto &entries = entryTable(count, corners);
+    std::array<double, 4> scores{{}};
+    double best_score = std::numeric_limits<double>::infinity();
+    for (unsigned entry = 0; entry < count; ++entry) {{
+        assert(capacities[entry] > 0);
+        assert(free_credits[entry] >= 0 &&
+               free_credits[entry] <= capacities[entry]);
+        const int distance =
+            absDistance(entries[entry].row - destination.row) +
+            absDistance(entries[entry].col - destination.col);
+        scores[entry] = distance + congestion_weight *
+            (1.0 - static_cast<double>(free_credits[entry]) /
+                   capacities[entry]);
+        if (scores[entry] < best_score)
+            best_score = scores[entry];
+    }}
+
+    std::array<bool, 4> minimum{{}};
+    int tie_count = 0;
+    for (unsigned entry = 0; entry < count; ++entry) {{
+        double difference = scores[entry] - best_score;
+        if (difference < 0.0)
+            difference = -difference;
+        if (difference <= 1e-12) {{
+            minimum[entry] = true;
+            ++tie_count;
+        }}
+    }}
+
+    if (tie_count == 1) {{
+        for (unsigned entry = 0; entry < count; ++entry) {{
+            if (minimum[entry])
+                return AdaptiveEntryChoice{{
+                    static_cast<int>(entry), tie_pointer, false}};
+        }}
+    }}
+
+    for (unsigned step = 0; step < count; ++step) {{
+        const unsigned entry = (tie_pointer + step) % count;
+        if (minimum[entry])
+            return AdaptiveEntryChoice{{
+                static_cast<int>(entry), (entry + 1) % count, true}};
+    }}
+    assert(false);
+    return AdaptiveEntryChoice{{0, tie_pointer, false}};
+}}
+
+constexpr int
+vcOffsetBegin(VcClass vc_class)
+{{
+    return vc_class == VcClass::Down ? 2 : 0;
+}}
+
+constexpr int
+vcOffsetEnd(VcClass vc_class, int vcs_per_vnet)
+{{
+    return vc_class == VcClass::Up ? 2 :
+           vc_class == VcClass::Down ? 4 : vcs_per_vnet;
+}}
+
+inline VcClass
+routeVcClass(int current, int source, int destination)
+{{
+    assert(isRouter(current) && isRouter(source) && isRouter(destination));
+    if (source == destination)
+        return VcClass::Up;
+
+    if (isRoot(current))
+        return current == destination ? VcClass::Up : VcClass::Down;
+
+    if (isGateway(current)) {{
+        const int cluster = gatewayCluster(current);
+        if (isWorker(destination) && workerCluster(destination) == cluster)
+            return VcClass::Down;
+        if (current == destination) {{
+            if (isWorker(source) && workerCluster(source) == cluster)
+                return VcClass::Up;
+            return VcClass::Down;
+        }}
+        return VcClass::Up;
+    }}
+
+    if (isWorker(current)) {{
+        const int cluster = workerCluster(current);
+        if (isWorker(destination) && workerCluster(destination) == cluster) {{
+            if (isWorker(source) && workerCluster(source) == cluster)
+                return VcClass::Up;
+            return VcClass::Down;
+        }}
+        return VcClass::Up;
+    }}
+
+    assert(false);
+    return VcClass::Any;
 }}
 
 }} // namespace sumcheck

@@ -3,6 +3,12 @@ set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 outdir=${1:-"${repo_root}/m5out/sumcheck_phase01/deterministic_smoke"}
+routing_mode=${2:-fixed}
+
+if [[ "${routing_mode}" != "fixed" && "${routing_mode}" != "adaptive" ]]; then
+    echo "routing mode must be fixed or adaptive" >&2
+    exit 2
+fi
 
 cd "${repo_root}"
 
@@ -20,6 +26,8 @@ run_case() {
         --topology=SumcheckHierarchy \
         --mesh-rows=0 \
         --routing-algorithm=3 \
+        --sumcheck-routing="${routing_mode}" \
+        --entry-congestion-weight=4.0 \
         --entries-per-cluster=4 \
         --entry-placement=staggered \
         --gateway-entry-link-latency=1 \
@@ -42,7 +50,7 @@ run_case() {
         echo "Sumcheck smoke ${name} mismatch: injected=${injected:-missing} received=${received:-missing}" >&2
         exit 1
     fi
-    echo "Sumcheck smoke ${name} PASS: injected=${injected} received=${received}"
+    echo "Sumcheck ${routing_mode} smoke ${name} PASS: injected=${injected} received=${received}"
 }
 
 # Worker 0 to Directory 4/G3 exercises source mesh, both hierarchy levels,

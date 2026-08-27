@@ -39,6 +39,7 @@
 #include "mem/ruby/network/Network.hh"
 #include "mem/ruby/network/fault_model/FaultModel.hh"
 #include "mem/ruby/network/garnet/CommonTypes.hh"
+#include "mem/ruby/network/garnet/SumcheckConfig.hh"
 #include "params/GarnetNetwork.hh"
 
 namespace gem5
@@ -83,6 +84,11 @@ class GarnetNetwork : public Network
     int getRoutingAlgorithm() const { return m_routing_algorithm; }
     uint32_t getEntriesPerCluster() const { return m_entries_per_cluster; }
     const std::string& getEntryPlacement() const { return m_entry_placement; }
+    bool isSumcheckAdaptive() const { return m_sumcheck_adaptive; }
+    double getEntryCongestionWeight() const
+    {
+        return m_entry_congestion_weight;
+    }
 
     bool isFaultModelEnabled() const { return m_enable_fault_model; }
     FaultModel* fault_model;
@@ -158,6 +164,11 @@ class GarnetNetwork : public Network
     }
 
     void update_traffic_distribution(RouteInfo route);
+    void recordSumcheckEntryChoice(
+        int gateway, int selected, int fixed, bool tied,
+        const std::vector<int> &credits,
+        const std::vector<int> &capacities);
+    void recordSumcheckVcAllocation(sumcheck::VcClass vc_class);
     int getNextPacketID() { return m_next_packet_id++; }
 
   protected:
@@ -171,6 +182,8 @@ class GarnetNetwork : public Network
     int m_routing_algorithm;
     uint32_t m_entries_per_cluster;
     std::string m_entry_placement;
+    bool m_sumcheck_adaptive;
+    double m_entry_congestion_weight;
     bool m_enable_fault_model;
 
     // Statistical variables
@@ -205,6 +218,18 @@ class GarnetNetwork : public Network
     statistics::Scalar  m_total_hops;
     statistics::Formula m_avg_hops;
 
+    statistics::Vector m_sumcheck_gateway_entry_choices;
+    statistics::Vector m_sumcheck_candidate_evaluations;
+    statistics::Vector m_sumcheck_candidate_credit_sum;
+    statistics::Vector m_sumcheck_candidate_occupancy_sum;
+    statistics::Vector m_sumcheck_candidate_capacity_sum;
+    statistics::Scalar m_sumcheck_gateway_entry_selections;
+    statistics::Scalar m_sumcheck_fixed_choice_mismatches;
+    statistics::Scalar m_sumcheck_tie_arbitrations;
+    statistics::Formula m_sumcheck_adaptive_reroute_rate;
+    statistics::Vector m_sumcheck_vc_allocations;
+    statistics::Vector m_sumcheck_tracked_link_flits;
+
     std::vector<std::vector<statistics::Scalar *>> m_data_traffic_distribution;
     std::vector<std::vector<statistics::Scalar *>> m_ctrl_traffic_distribution;
 
@@ -217,6 +242,8 @@ class GarnetNetwork : public Network
     std::vector<NetworkLink *> m_networklinks; // All flit links in the network
     std::vector<NetworkBridge *> m_networkbridges; // All network bridges
     std::vector<CreditLink *> m_creditlinks; // All credit links in the network
+    std::vector<NetworkLink *> m_sumcheck_tracked_links;
+    std::vector<std::string> m_sumcheck_tracked_link_names;
     std::vector<NetworkInterface *> m_nis;   // All NI's in Network
     int m_next_packet_id; // static vairable for packet id allocation
 };

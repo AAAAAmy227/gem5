@@ -95,10 +95,13 @@ OutputUnit::has_credit(int out_vc)
 
 // Check if the output port (i.e., input port at next router) has free VCs.
 bool
-OutputUnit::has_free_vc(int vnet)
+OutputUnit::has_free_vc(int vnet, sumcheck::VcClass vc_class)
 {
     int vc_base = vnet*m_vc_per_vnet;
-    for (int vc = vc_base; vc < vc_base + m_vc_per_vnet; vc++) {
+    const int begin = sumcheck::vcOffsetBegin(vc_class);
+    const int end = sumcheck::vcOffsetEnd(vc_class, m_vc_per_vnet);
+    assert(vc_class == sumcheck::VcClass::Any || m_vc_per_vnet >= 4);
+    for (int vc = vc_base + begin; vc < vc_base + end; vc++) {
         if (is_vc_idle(vc, curTick()))
             return true;
     }
@@ -108,10 +111,13 @@ OutputUnit::has_free_vc(int vnet)
 
 // Assign a free output VC to the winner of Switch Allocation
 int
-OutputUnit::select_free_vc(int vnet)
+OutputUnit::select_free_vc(int vnet, sumcheck::VcClass vc_class)
 {
     int vc_base = vnet*m_vc_per_vnet;
-    for (int vc = vc_base; vc < vc_base + m_vc_per_vnet; vc++) {
+    const int begin = sumcheck::vcOffsetBegin(vc_class);
+    const int end = sumcheck::vcOffsetEnd(vc_class, m_vc_per_vnet);
+    assert(vc_class == sumcheck::VcClass::Any || m_vc_per_vnet >= 4);
+    for (int vc = vc_base + begin; vc < vc_base + end; vc++) {
         if (is_vc_idle(vc, curTick())) {
             outVcState[vc].setState(ACTIVE_, curTick());
             return vc;
@@ -119,6 +125,35 @@ OutputUnit::select_free_vc(int vnet)
     }
 
     return -1;
+}
+
+int
+OutputUnit::free_credits(int vnet, sumcheck::VcClass vc_class)
+{
+    assert(vc_class != sumcheck::VcClass::Any);
+    assert(m_vc_per_vnet >= 4);
+    const int vc_base = vnet * m_vc_per_vnet;
+    int credits = 0;
+    for (int offset = sumcheck::vcOffsetBegin(vc_class);
+         offset < sumcheck::vcOffsetEnd(vc_class, m_vc_per_vnet);
+         ++offset) {
+        credits += outVcState[vc_base + offset].get_credit_count();
+    }
+    return credits;
+}
+
+int
+OutputUnit::credit_capacity(int vnet, sumcheck::VcClass vc_class)
+{
+    assert(vc_class != sumcheck::VcClass::Any);
+    assert(m_vc_per_vnet >= 4);
+    const auto vnet_type = m_router->get_net_ptr()->get_vnet_type(vnet);
+    const int per_vc = vnet_type == DATA_VNET_ ?
+        m_router->get_net_ptr()->getBuffersPerDataVC() :
+        m_router->get_net_ptr()->getBuffersPerCtrlVC();
+    return per_vc *
+        (sumcheck::vcOffsetEnd(vc_class, m_vc_per_vnet) -
+         sumcheck::vcOffsetBegin(vc_class));
 }
 
 /*

@@ -3,6 +3,7 @@
 Canonical spec: docs/sumcheck_spec.md
 Current task: tasks/<phase>.md
 State: SUMCHECK_STATUS.md
+History (consult only when necessary): docs/history
 
 - Work only on the current phase.
 - Inspect actual gem5 APIs; never guess from another version.

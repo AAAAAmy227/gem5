@@ -30,11 +30,14 @@
 
 #include "mem/ruby/network/garnet/RoutingUnit.hh"
 
+#include <array>
+
 #include "base/cast.hh"
 #include "base/compiler.hh"
 #include "base/logging.hh"
 #include "debug/RubyNetwork.hh"
 #include "mem/ruby/network/garnet/InputUnit.hh"
+#include "mem/ruby/network/garnet/OutputUnit.hh"
 #include "mem/ruby/network/garnet/Router.hh"
 #include "mem/ruby/network/garnet/SumcheckConfig.hh"
 #include "mem/ruby/slicc_interface/Message.hh"
@@ -53,6 +56,7 @@ RoutingUnit::RoutingUnit(Router *router)
     m_router = router;
     m_routing_table.clear();
     m_weight_table.clear();
+    m_sumcheck_tie_next = 0;
 }
 
 void
@@ -323,7 +327,7 @@ RoutingUnit::outportComputeSumcheck(RouteInfo route,
              "Sumcheck custom routing called at destination router %d",
              current);
 
-    const auto *network = m_router->get_net_ptr();
+    auto *network = m_router->get_net_ptr();
     const unsigned entry_count = network->getEntriesPerCluster();
     const bool corners = network->getEntryPlacement() == "corners";
     PortDirection direction = "Unknown";
@@ -367,9 +371,45 @@ RoutingUnit::outportComputeSumcheck(RouteInfo route,
         const int cluster = gatewayCluster(current);
         if (isWorker(destination) &&
             workerCluster(destination) == cluster) {
-            const int entry_index = nearestEntryIndex(
+            const int fixed_entry = nearestEntryIndex(
                 destination, entry_count, corners);
-            direction = "Entry" + std::to_string(entry_index);
+            int selected_entry = fixed_entry;
+            bool tied = false;
+            std::vector<int> candidate_credits(entry_count);
+            std::vector<int> candidate_capacities(entry_count);
+            std::array<int, 4> credit_state{};
+            std::array<int, 4> capacity_state{};
+
+            for (unsigned entry = 0; entry < entry_count; ++entry) {
+                const int outport = outportForDirection(
+                    "Entry" + std::to_string(entry));
+                auto *output = m_router->getOutputUnit(outport);
+                candidate_credits[entry] = output->free_credits(
+                    route.vnet, VcClass::Down);
+                candidate_capacities[entry] = output->credit_capacity(
+                    route.vnet, VcClass::Down);
+                fatal_if(candidate_capacities[entry] <= 0,
+                         "Gateway %d entry %u has zero D-VC capacity",
+                         current, entry);
+                credit_state[entry] = candidate_credits[entry];
+                capacity_state[entry] = candidate_capacities[entry];
+            }
+
+            if (network->isSumcheckAdaptive()) {
+                const auto choice = chooseAdaptiveEntry(
+                    destination, entry_count, corners,
+                    credit_state, capacity_state,
+                    network->getEntryCongestionWeight(),
+                    m_sumcheck_tie_next);
+                selected_entry = choice.index;
+                m_sumcheck_tie_next = choice.next_tie_pointer;
+                tied = choice.tied;
+            }
+
+            network->recordSumcheckEntryChoice(
+                cluster, selected_entry, fixed_entry, tied,
+                candidate_credits, candidate_capacities);
+            direction = "Entry" + std::to_string(selected_entry);
         } else if (isRoot(destination) ||
                    (isGateway(destination) && destination != current) ||
                    (isWorker(destination) &&

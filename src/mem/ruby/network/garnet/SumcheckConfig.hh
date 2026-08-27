@@ -6,6 +6,7 @@
 
 #include <array>
 #include <cassert>
+#include <limits>
 
 namespace gem5
 {
@@ -29,6 +30,20 @@ struct Coord
 {
     int row;
     int col;
+};
+
+enum class VcClass
+{
+    Up,
+    Down,
+    Any,
+};
+
+struct AdaptiveEntryChoice
+{
+    int index;
+    unsigned next_tie_pointer;
+    bool tied;
 };
 
 inline constexpr std::array<Coord, 4> EntriesP1 = {{Coord{1, 1}, Coord{0, 0}, Coord{0, 0}, Coord{0, 0}}};
@@ -121,6 +136,113 @@ nearestEntryIndex(int worker_id, unsigned count, bool corners)
         }
     }
     return best_index;
+}
+
+inline AdaptiveEntryChoice
+chooseAdaptiveEntry(int worker_id, unsigned count, bool corners,
+                    const std::array<int, 4> &free_credits,
+                    const std::array<int, 4> &capacities,
+                    double congestion_weight, unsigned tie_pointer)
+{
+    assert(isWorker(worker_id));
+    assert(validEntryConfiguration(count, corners));
+    assert(congestion_weight >= 0.0);
+    assert(tie_pointer < count);
+    const Coord destination = workerCoord(worker_id);
+    const auto &entries = entryTable(count, corners);
+    std::array<double, 4> scores{};
+    double best_score = std::numeric_limits<double>::infinity();
+    for (unsigned entry = 0; entry < count; ++entry) {
+        assert(capacities[entry] > 0);
+        assert(free_credits[entry] >= 0 &&
+               free_credits[entry] <= capacities[entry]);
+        const int distance =
+            absDistance(entries[entry].row - destination.row) +
+            absDistance(entries[entry].col - destination.col);
+        scores[entry] = distance + congestion_weight *
+            (1.0 - static_cast<double>(free_credits[entry]) /
+                   capacities[entry]);
+        if (scores[entry] < best_score)
+            best_score = scores[entry];
+    }
+
+    std::array<bool, 4> minimum{};
+    int tie_count = 0;
+    for (unsigned entry = 0; entry < count; ++entry) {
+        double difference = scores[entry] - best_score;
+        if (difference < 0.0)
+            difference = -difference;
+        if (difference <= 1e-12) {
+            minimum[entry] = true;
+            ++tie_count;
+        }
+    }
+
+    if (tie_count == 1) {
+        for (unsigned entry = 0; entry < count; ++entry) {
+            if (minimum[entry])
+                return AdaptiveEntryChoice{
+                    static_cast<int>(entry), tie_pointer, false};
+        }
+    }
+
+    for (unsigned step = 0; step < count; ++step) {
+        const unsigned entry = (tie_pointer + step) % count;
+        if (minimum[entry])
+            return AdaptiveEntryChoice{
+                static_cast<int>(entry), (entry + 1) % count, true};
+    }
+    assert(false);
+    return AdaptiveEntryChoice{0, tie_pointer, false};
+}
+
+constexpr int
+vcOffsetBegin(VcClass vc_class)
+{
+    return vc_class == VcClass::Down ? 2 : 0;
+}
+
+constexpr int
+vcOffsetEnd(VcClass vc_class, int vcs_per_vnet)
+{
+    return vc_class == VcClass::Up ? 2 :
+           vc_class == VcClass::Down ? 4 : vcs_per_vnet;
+}
+
+inline VcClass
+routeVcClass(int current, int source, int destination)
+{
+    assert(isRouter(current) && isRouter(source) && isRouter(destination));
+    if (source == destination)
+        return VcClass::Up;
+
+    if (isRoot(current))
+        return current == destination ? VcClass::Up : VcClass::Down;
+
+    if (isGateway(current)) {
+        const int cluster = gatewayCluster(current);
+        if (isWorker(destination) && workerCluster(destination) == cluster)
+            return VcClass::Down;
+        if (current == destination) {
+            if (isWorker(source) && workerCluster(source) == cluster)
+                return VcClass::Up;
+            return VcClass::Down;
+        }
+        return VcClass::Up;
+    }
+
+    if (isWorker(current)) {
+        const int cluster = workerCluster(current);
+        if (isWorker(destination) && workerCluster(destination) == cluster) {
+            if (isWorker(source) && workerCluster(source) == cluster)
+                return VcClass::Up;
+            return VcClass::Down;
+        }
+        return VcClass::Up;
+    }
+
+    assert(false);
+    return VcClass::Any;
 }
 
 } // namespace sumcheck

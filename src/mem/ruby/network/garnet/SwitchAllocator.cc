@@ -31,11 +31,13 @@
 
 #include "mem/ruby/network/garnet/SwitchAllocator.hh"
 
+#include "base/logging.hh"
 #include "debug/RubyNetwork.hh"
 #include "mem/ruby/network/garnet/GarnetNetwork.hh"
 #include "mem/ruby/network/garnet/InputUnit.hh"
 #include "mem/ruby/network/garnet/OutputUnit.hh"
 #include "mem/ruby/network/garnet/Router.hh"
+#include "mem/ruby/network/garnet/SumcheckConfig.hh"
 
 namespace gem5
 {
@@ -45,6 +47,44 @@ namespace ruby
 
 namespace garnet
 {
+
+namespace
+{
+
+sumcheck::VcClass
+vcClassForOffset(int offset, int vcs_per_vnet)
+{
+    fatal_if(vcs_per_vnet < 4 || offset < 0 || offset >= 4,
+             "Sumcheck VC offset %d is outside U={0,1}, D={2,3} "
+             "with %d VCs/vnet", offset, vcs_per_vnet);
+    return offset < 2 ? sumcheck::VcClass::Up : sumcheck::VcClass::Down;
+}
+
+sumcheck::VcClass
+requiredVcClass(Router *router, int inport, int invc, int vcs_per_vnet)
+{
+    auto *input = router->getInputUnit(inport);
+    const RouteInfo &route = input->peekTopFlit(invc)->get_route();
+    const auto required = sumcheck::routeVcClass(
+        router->get_id(), route.src_router, route.dest_router);
+    const auto input_class = vcClassForOffset(
+        invc % vcs_per_vnet, vcs_per_vnet);
+
+    fatal_if(input_class == sumcheck::VcClass::Down &&
+             required == sumcheck::VcClass::Up,
+             "Illegal Sumcheck D->U VC transition at router %d "
+             "for route %d->%d", router->get_id(),
+             route.src_router, route.dest_router);
+    fatal_if(input_class == sumcheck::VcClass::Up &&
+             required == sumcheck::VcClass::Down &&
+             router->get_id() != sumcheck::RootId,
+             "Illegal Sumcheck U->D VC transition outside root at router %d "
+             "for route %d->%d", router->get_id(),
+             route.src_router, route.dest_router);
+    return required;
+}
+
+} // anonymous namespace
 
 SwitchAllocator::SwitchAllocator(Router *router)
     : Consumer(router)
@@ -288,6 +328,11 @@ SwitchAllocator::send_allowed(int inport, int invc, int outport, int outvc)
     // Check if ordering violated (in ordered vnet)
 
     int vnet = get_vnet(invc);
+    const bool sumcheck_routing =
+        m_router->get_net_ptr()->getRoutingAlgorithm() == SUMCHECK_;
+    const auto required_class = sumcheck_routing ?
+        requiredVcClass(m_router, inport, invc, m_vc_per_vnet) :
+        sumcheck::VcClass::Any;
     bool has_outvc = (outvc != -1);
     bool has_credit = false;
 
@@ -297,7 +342,7 @@ SwitchAllocator::send_allowed(int inport, int invc, int outport, int outvc)
         // needs outvc
         // this is only true for HEAD and HEAD_TAIL flits.
 
-        if (output_unit->has_free_vc(vnet)) {
+        if (output_unit->has_free_vc(vnet, required_class)) {
 
             has_outvc = true;
 
@@ -306,6 +351,12 @@ SwitchAllocator::send_allowed(int inport, int invc, int outport, int outvc)
             has_credit = true;
         }
     } else {
+        if (sumcheck_routing) {
+            fatal_if(vcClassForOffset(outvc % m_vc_per_vnet,
+                                      m_vc_per_vnet) != required_class,
+                     "Sumcheck allocated outvc %d from the wrong U/D subset "
+                     "at router %d", outvc, m_router->get_id());
+        }
         has_credit = output_unit->has_credit(outvc);
     }
 
@@ -341,12 +392,20 @@ SwitchAllocator::send_allowed(int inport, int invc, int outport, int outvc)
 int
 SwitchAllocator::vc_allocate(int outport, int inport, int invc)
 {
+    const bool sumcheck_routing =
+        m_router->get_net_ptr()->getRoutingAlgorithm() == SUMCHECK_;
+    const auto required_class = sumcheck_routing ?
+        requiredVcClass(m_router, inport, invc, m_vc_per_vnet) :
+        sumcheck::VcClass::Any;
     // Select a free VC from the output port
     int outvc =
-        m_router->getOutputUnit(outport)->select_free_vc(get_vnet(invc));
+        m_router->getOutputUnit(outport)->select_free_vc(
+            get_vnet(invc), required_class);
 
     // has to get a valid VC since it checked before performing SA
     assert(outvc != -1);
+    if (sumcheck_routing)
+        m_router->get_net_ptr()->recordSumcheckVcAllocation(required_class);
     m_router->getInputUnit(inport)->grant_outvc(invc, outvc);
     return outvc;
 }

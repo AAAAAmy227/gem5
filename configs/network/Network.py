@@ -96,7 +96,19 @@ def define_options(parser):
             0: weight-based table
             1: XY (for Mesh. see garnet/RoutingUnit.cc)
             2: Custom Ring (see garnet/RoutingUnit.cc)
-            3: SumcheckHierarchy fixed routing""",
+            3: SumcheckHierarchy routing""",
+    )
+    parser.add_argument(
+        "--sumcheck-routing",
+        choices=("fixed", "adaptive"),
+        default="fixed",
+        help="Sumcheck gateway-to-entry routing policy",
+    )
+    parser.add_argument(
+        "--entry-congestion-weight",
+        type=float,
+        default=4.0,
+        help="Sumcheck adaptive entry congestion weight (lambda)",
     )
     parser.add_argument(
         "--entries-per-cluster",
@@ -192,12 +204,21 @@ def create_network(options, ruby):
 def init_network(options, network, InterfaceClass):
 
     if options.network == "garnet":
+        if options.routing_algorithm == 3 and options.vcs_per_vnet < 4:
+            fatal(
+                "Sumcheck routing requires --vcs-per-vnet >= 4 "
+                "(offsets 0,1 are U and 2,3 are D)"
+            )
+        if options.entry_congestion_weight < 0:
+            fatal("--entry-congestion-weight must be non-negative")
         network.num_rows = options.mesh_rows
         network.vcs_per_vnet = options.vcs_per_vnet
         network.ni_flit_size = options.link_width_bits / 8
         network.routing_algorithm = options.routing_algorithm
         network.entries_per_cluster = options.entries_per_cluster
         network.entry_placement = options.entry_placement
+        network.sumcheck_adaptive = options.sumcheck_routing == "adaptive"
+        network.entry_congestion_weight = options.entry_congestion_weight
         network.garnet_deadlock_threshold = options.garnet_deadlock_threshold
 
         # Create Bridges and connect them to the corresponding links

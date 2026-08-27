@@ -40,6 +40,7 @@
 #include "mem/ruby/network/MessageBuffer.hh"
 #include "mem/ruby/network/garnet/Credit.hh"
 #include "mem/ruby/network/garnet/flitBuffer.hh"
+#include "mem/ruby/network/garnet/SumcheckConfig.hh"
 #include "mem/ruby/slicc_interface/Message.hh"
 
 namespace gem5
@@ -387,19 +388,12 @@ NetworkInterface::flitisizeMessage(MsgPtr msg_ptr, int vnet)
 
     // loop to convert all multicast messages into unicast messages
     for (int ctr = 0; ctr < dest_nodes.size(); ctr++) {
-
-        // this will return a free output virtual channel
-        int vc = calculateVC(vnet);
-
-        if (vc == -1) {
-            return false ;
-        }
         MsgPtr new_msg_ptr = msg_ptr->clone();
         NodeID destID = dest_nodes[ctr];
 
         Message *new_net_msg_ptr = new_msg_ptr.get();
+        NetDest personal_dest;
         if (dest_nodes.size() > 1) {
-            NetDest personal_dest;
             for (int m = 0; m < (int) MachineType_NUM; m++) {
                 if ((destID >= MachineType_base_number((MachineType) m)) &&
                     destID < MachineType_base_number((MachineType) (m+1))) {
@@ -411,11 +405,6 @@ NetworkInterface::flitisizeMessage(MsgPtr msg_ptr, int vnet)
                     break;
                 }
             }
-            net_msg_dest.removeNetDest(personal_dest);
-            // removing the destination from the original message to reflect
-            // that a message with this particular destination has been
-            // flitisized and an output vc is acquired
-            net_msg_ptr->getDestination().removeNetDest(personal_dest);
         }
 
         // Embed Route into the flits
@@ -433,6 +422,18 @@ NetworkInterface::flitisizeMessage(MsgPtr msg_ptr, int vnet)
         // initialize hops_traversed to -1
         // so that the first router increments it to 0
         route.hops_traversed = -1;
+
+        // The NI selects the first router input VC from the same U/D subset
+        // that the router allocator will enforce on the first output hop.
+        int vc = calculateVC(vnet, route);
+        if (vc == -1)
+            return false;
+
+        if (dest_nodes.size() > 1) {
+            net_msg_dest.removeNetDest(personal_dest);
+            // Remove this destination only after a legal VC is acquired.
+            net_msg_ptr->getDestination().removeNetDest(personal_dest);
+        }
 
         m_net_ptr->increment_injected_packets(vnet);
         m_net_ptr->update_traffic_distribution(route);
@@ -457,18 +458,30 @@ NetworkInterface::flitisizeMessage(MsgPtr msg_ptr, int vnet)
 
 // Looking for a free output vc
 int
-NetworkInterface::calculateVC(int vnet)
+NetworkInterface::calculateVC(int vnet, const RouteInfo &route)
 {
-    for (int i = 0; i < m_vc_per_vnet; i++) {
+    int first_offset = 0;
+    int subset_size = m_vc_per_vnet;
+    if (m_net_ptr->getRoutingAlgorithm() == SUMCHECK_) {
+        const auto vc_class = sumcheck::routeVcClass(
+            route.src_router, route.src_router, route.dest_router);
+        first_offset = sumcheck::vcOffsetBegin(vc_class);
+        subset_size = sumcheck::vcOffsetEnd(vc_class, m_vc_per_vnet) -
+            first_offset;
+        assert(m_vc_per_vnet >= 4 && subset_size == 2);
+    }
+
+    m_vc_allocator[vnet] %= subset_size;
+    for (int i = 0; i < subset_size; i++) {
         int delta = m_vc_allocator[vnet];
         m_vc_allocator[vnet]++;
-        if (m_vc_allocator[vnet] == m_vc_per_vnet)
+        if (m_vc_allocator[vnet] == subset_size)
             m_vc_allocator[vnet] = 0;
 
-        if (outVcState[(vnet*m_vc_per_vnet) + delta].isInState(
-                    IDLE_, curTick())) {
+        const int vc = vnet * m_vc_per_vnet + first_offset + delta;
+        if (outVcState[vc].isInState(IDLE_, curTick())) {
             vc_busy_counter[vnet] = 0;
-            return ((vnet*m_vc_per_vnet) + delta);
+            return vc;
         }
     }
 
