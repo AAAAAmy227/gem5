@@ -47,6 +47,33 @@ CONTROLLER_TO_ROUTER = (
     + (ROOT_ID,) * 3
 )
 
+MESH_WORKER_TO_ROUTER = tuple(
+    (cluster // 2 * 4 + local // 4) * 8
+    + (cluster % 2 * 4 + local % 4)
+    for cluster in range(NUM_CLUSTERS)
+    for local in range(WORKERS_PER_CLUSTER)
+)
+MESH_CONTROLLER_TO_ROUTER = MESH_WORKER_TO_ROUTER + (18, 21, 42, 45, 18)
+
+
+def mesh_xy_route(source_endpoint, destination_endpoint):
+    """Strict X-then-Y route for the 8x8 baseline endpoint placement."""
+
+    if not 0 <= source_endpoint < 69 or not 0 <= destination_endpoint < 69:
+        raise ValueError("invalid Mesh baseline endpoint")
+    current = MESH_CONTROLLER_TO_ROUTER[source_endpoint]
+    target = MESH_CONTROLLER_TO_ROUTER[destination_endpoint]
+    route = [current]
+    row, col = divmod(current, 8)
+    target_row, target_col = divmod(target, 8)
+    while col != target_col:
+        col += 1 if target_col > col else -1
+        route.append(row * 8 + col)
+    while row != target_row:
+        row += 1 if target_row > row else -1
+        route.append(row * 8 + col)
+    return tuple(route)
+
 
 class LinkSpec(NamedTuple):
     """One undirected physical link and its stable endpoint port names."""

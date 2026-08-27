@@ -1,239 +1,177 @@
-# Sumcheck NoC — Phase 03 Handoff
+# Sumcheck NoC — Phase 04 Handoff
 
 ## Current phase/status
 
-- Phase 01 (`01_topology_fixed`): **PASS / complete**.
-- Phase 02 (`02_adaptive_vc_cdg`): **PASS / complete**.
-- Phase 03 (`03_causal_workload`): **PASS / complete**. Aggregated and
-  no-aggregation graphs are validated before simulation, successor injection
-  is driven only by destination-NI ejection, exact 32/128-byte packets traverse
-  Garnet, two root-local Phase-C rounds run without network messages, and
-  fixed/adaptive full-workload smokes complete with injected == received.
-- The reference bundle remains unavailable. Phase-03 graphs and static oracles
-  are derived from `docs/sumcheck_spec.md`, not claimed as bundle-verified.
-- Wormhole remains an inherited branch-integration limitation: this branch has
-  no `--wormhole` CLI. Its implementation remains at
-  `61eb8c18beeb013d5d3c320cfa0014bed2809d19`.
-- Worktree: `/root/gem5` (WSL Ubuntu). No commit, push, merge, rebase,
-  cherry-pick, amend, branch switch, reset, or clean was performed in Phase 03.
+- Phase 01 topology/fixed routing: **PASS**.
+- Phase 02 adaptive VC/CDG: **PASS**.
+- Phase 03 causal workload: **PASS**.
+- Phase 04 baselines/experiments: **PASS with explicitly bounded data and
+  remaining full-matrix gaps**.
+- Do not begin the Phase-05 final audit implicitly; it remains the next phase.
+- Reference bundle remains unavailable. Static values are derived from
+  `docs/sumcheck_spec.md`, never labeled measured gem5 results.
+- Wormhole remains branch-separated and unavailable on this branch.
 
 ## Repository state
 
-- Branch: `sumcheck`.
-- HEAD: `212b1f83fde841e3b18a32d390797fcf904beaba`
-  (`sumcheck: complete phase 02 adaptive VC routing and CDG checks`).
-- All Phase-03 implementation, tests, scripts, and this handoff are unstaged
-  and uncommitted.
+- Worktree: `/root/gem5`, branch `sumcheck`.
+- HEAD: `85fe5e0c9ab189825be96a78ea513a180da6a189`
+  (`sumcheck: complete phase 03 causal workload`).
+- Phase-04 changes are unstaged and uncommitted.
+- No commit, push, merge, rebase, cherry-pick, amend, branch switch, reset, or
+  clean was performed.
 
-## Implemented behavior
+## Phase-04 implementation
 
-### Logical traces and dependency validation
+- `SumcheckMesh` is a strict 8x8 XY baseline. Workers preserve quadrant
+  placement; G0..G3 map to routers 18/21/42/45 and R to router 18. All 69
+  roles retain real NIs, ExtLinks, and local-port competition.
+- Required variants exist in `scripts/run_sumcheck_phase04_case.sh`; the
+  smoke runner exercises all eight.
+- A-to-B now keeps one terminal-state packet per worker routed through the
+  assigned entry to the gateway cut. This preserved the 2004 event total and
+  corrected hierarchy static full-trace values to the specification.
+- Open-loop deterministic uniform-random and cluster-skewed/bursty traces have
+  explicit release cycles and exact 32/128-byte packets. The causal workload
+  scheduler respects both release time and dependencies, drains all traffic,
+  and requires injected==received.
+- Workload reports now include mean/P95/P99 packet latency, completion cycle,
+  aggregate accepted throughput, and every experiment knob. Garnet exposes
+  per-link flit counts for measured maximum-link load.
+- `collect_sumcheck_results.py` parses actual `config.ini` topology objects,
+  raw stats, costs, link utilization, entry choices, reroute rate, latency,
+  hops, and accounting into JSON/CSV summaries.
+- Global per-VC depths cannot exactly match Mesh's total buffer slots. The
+  named buffer-matched sensitivity is explicitly a lower bracket (6020 slots,
+  data depth 3); normal p4 is the upper bracket (7224); Mesh is 7032.
 
-- `configs/topologies/SumcheckWorkload.py` builds stable deterministic graphs
-  directly from the canonical specification.
-- Aggregated p=1, p=2, and p=4 each contain exactly **2004** events: 14 Phase-A
-  rounds, A→B, four Phase-B rounds, and B→C. Phase C is two root-local rounds
-  with no messages.
-- The pure-router/no-cluster-aggregation control contains exactly **1856**
-  events: 14 rounds of 64 worker→root partials and 64 individual root→worker
-  challenges, followed by 64 worker terminal states.
-- Python and C++ validators reject duplicate IDs, missing/repeated dependencies,
-  and self/forward dependencies before simulation.
-- Readiness is an actual arrived-event set plus remaining-dependency count. No
-  expected latency or precomputed injection timestamp is used.
-- Fixed seed/config generation is byte-stable. Completion reports record trace
-  and realized injection-order FNV-64 digests.
+## Static acceptance evidence
 
-### Real Garnet causal replay
+Command:
 
-- `SumcheckWorkload` is a central endpoint/controller scheduler connected to
-  one outgoing protocol `MessageBuffer` per logical endpoint.
-- Every `RequestMsg` carries a stable event ID and optional exact byte count in
-  the base Ruby `Message`. `NetworkInterface` uses it when present; all other
-  traffic retains normal `MessageSizeType` conversion.
-- On tail arrival, the NI enqueues at the destination endpoint, sends the
-  VC-free credit, updates Garnet stats, and only then reports that event ID.
-- A dependent output enters a fresh source endpoint queue no earlier than the
-  next endpoint clock after all required arrival callbacks:
+```bash
+PYTHONPATH=configs python3 scripts/sumcheck_phase04_oracle.py \
+  --output m5out/sumcheck_phase04/static_oracle.json
+```
 
-  ```text
-  packet eject -> VC-free credit -> controller dependency wait
-  -> one controller cycle -> fresh packet injection
-  ```
+Result: hierarchy p1 `22448/1016`, p2 `18160/536`, p4 `11952/256`, and
+p4 no-aggregation `26048/2368` total flit-hops/peak undirected-link flits all
+match the specification.
 
-  No router input VC is retained for aggregation.
-- Partials/state are 128 B and challenges are 32 B. At the tested
-  128-bit/16-byte link width these are 8 and 2 flits.
-- After all B→C arrivals, two network-silent Phase-C root rounds execute before
-  total completion.
-- The watchdog reports injected/received/outstanding counts and up to eight
-  pending IDs, endpoints, kinds, injection states, and unmet dependencies.
+Strict Mesh XY calculates `15824/624`, while the spec says `16208/632`. The
+spec value requires forcing A-to-B packets through hierarchy entry waypoints,
+which is not conventional XY. The implemented/measured Mesh stays strict XY;
+the discrepancy is recorded in the oracle and evaluation record.
 
-### Endpoint / NI / ExtLink / router mapping
-
-The causal harness uses exactly 69 physical endpoints with no co-located extras:
-
-| Logical roles | Ruby controller identity | Global node / NI | ExtLink | Router |
-|---|---|---:|---:|---:|
-| workers 0..63 | `L1Cache` version 0..63 | 0..63 | 0..63 | 0..63 |
-| G0..G3 | `Directory` version 0..3 | 64..67 | 64..67 | 64..67 |
-| root R | `Directory` version 4 | 68 | 68 | 68 |
-
-`config.ini` confirms 69 routers, NIs, and ExtLinks. Each role has one real
-injection queue, NI, ExtLink, and local router port; its messages contend there.
-
-Repository/API adaptation and consequence:
-
-- Garnet_standalone is asymmetric by default. Phase 03 adds a vnet-0 receive
-  queue to L1 and transmit queue to Directory while preserving existing paths.
-- A shared `SumcheckWorkload` manager holds logical dependency/aggregation
-  state instead of duplicating the graph in 69 SLICC machines. It injects and
-  observes only through endpoint queues and destination NI ejection, so network
-  causality and contention are real.
-- Aggregation compute latency is one endpoint clock, not calibrated arithmetic
-  latency; the shared manager itself is not a modeled hardware cost. NoC
-  endpoint cost is exact. Sixty-four unused sequencer/cache objects remain
-  because generated L1 controllers require them, but add no NIs, ExtLinks,
-  router ports, or traffic.
-
-### No-aggregation root-cut accounting
-
-At actual 16 B/flit, logical/static per-cluster, per-Phase-A-round root cut is:
-
-| Variant | Upward | Downward | Relationship |
-|---|---:|---:|---:|
-| aggregated | 8 flits | 2 flits | 1x |
-| no aggregation | 128 flits | 32 flits | 16x each direction |
-
-The helper recalculates by ceiling division for other flit sizes. Evidence:
-`m5out/sumcheck_phase03/logical_oracle.json`.
-
-## Acceptance evidence
-
-### Build and static/unit tests
+## Build and regression evidence
 
 ```bash
 scons build/NULL/gem5.debug -j16 \
-  > m5out/sumcheck_phase03/build.log 2>&1
-```
-
-**PASS**; only known optional PNG/HDF5 warnings.
-
-```bash
-python3 -m py_compile configs/network/Network.py configs/ruby/Ruby.py \
-  configs/ruby/Garnet_standalone.py \
-  configs/topologies/SumcheckConfig.py \
-  configs/topologies/SumcheckHierarchy.py \
-  configs/topologies/SumcheckWorkload.py \
-  configs/example/sumcheck_causal_traffic.py \
-  scripts/sumcheck_workload_oracle.py tests/pyunit/sumcheck_cdg.py \
-  tests/pyunit/pyunit_sumcheck_phase03.py
+  > m5out/sumcheck_phase04/build.log 2>&1
 python3 tests/pyunit/pyunit_sumcheck_topology.py
 python3 tests/pyunit/pyunit_sumcheck_phase02.py
 python3 tests/pyunit/pyunit_sumcheck_phase03.py
-```
-
-Syntax **PASS**; topology **8/8**; Phase 02 **12/12**; Phase 03
-dependency/boundary/root-cut tests **10/10**. Logs:
-`m5out/sumcheck_phase03/regressions/{syntax.log,topology.log,phase02.log,phase03.log}`.
-
-```bash
-python3 scripts/sumcheck_workload_oracle.py \
-  --output m5out/sumcheck_phase03/logical_oracle.json --flit-bytes=16
-```
-
-**PASS**: aggregated p=1/2/4 are 2004 events; no aggregation is 1856;
-root-cut values are 8/2 versus 128/32 flits.
-
-### Full causal gem5 workloads
-
-```bash
-bash scripts/run_sumcheck_causal_smoke.sh \
-  m5out/sumcheck_phase03/fixed_aggregated fixed aggregated 4
-bash scripts/run_sumcheck_causal_smoke.sh \
-  m5out/sumcheck_phase03/adaptive_aggregated adaptive aggregated 4
-bash scripts/run_sumcheck_causal_smoke.sh \
-  m5out/sumcheck_phase03/fixed_no_aggregation fixed no-aggregation 4
-```
-
-Measured Garnet results at 16 B/flit, seed 7:
-
-| Case | Events / packets injected / received | Flits injected / received | Completion tick | Result |
-|---|---:|---:|---:|---|
-| p=4 aggregated fixed | 2004 / 2004 / 2004 | 10224 / 10224 | 5160 | PASS |
-| p=4 aggregated adaptive | 2004 / 2004 / 2004 | 10224 / 10224 | 5160 | PASS |
-| p=4 no aggregation fixed | 1856 / 1856 / 1856 | 9472 / 9472 | 17976 | PASS |
-
-Each directory contains `trace.jsonl`, `config.ini`, `stats.txt`, `run.log`, and
-`workload_report.json`. Reports contain per-round ticks, zero outstanding,
-ejection count, two Phase-C rounds, seed, and digests. Garnet stats independently
-match packet/flit totals. Equal fixed/adaptive completion is only a low-load
-smoke result, not a performance conclusion.
-
-### Reproducibility
-
-```bash
-bash scripts/run_sumcheck_causal_smoke.sh \
-  m5out/sumcheck_phase03/fixed_aggregated_repeat fixed aggregated 4
-```
-
-**PASS**: trace digest `6bef6b51aa1d2a2`, injection digest
-`612f3eda132ec9cf`, 2004 packets, 10224 flits, and completion tick 5160 all
-match the first fixed run.
-
-### Prior routing/CDG regressions
-
-```bash
+python3 tests/pyunit/pyunit_sumcheck_phase04.py
 python3 tests/pyunit/sumcheck_cdg.py \
-  --output m5out/sumcheck_phase03/regressions/cdg_report.json
+  --output m5out/sumcheck_phase04/regressions/cdg_report.json
 g++ -std=c++17 -Isrc tests/pyunit/sumcheck_adaptive_cpp_test.cc \
-  -o m5out/sumcheck_phase03/regressions/sumcheck_adaptive_cpp_test
-m5out/sumcheck_phase03/regressions/sumcheck_adaptive_cpp_test
-bash scripts/run_sumcheck_smoke.sh \
-  m5out/sumcheck_phase03/prior_fixed_smoke fixed
-bash scripts/run_sumcheck_smoke.sh \
-  m5out/sumcheck_phase03/prior_adaptive_smoke adaptive
+  -o m5out/sumcheck_phase04/regressions/sumcheck_adaptive_cpp_test
+m5out/sumcheck_phase04/regressions/sumcheck_adaptive_cpp_test
 ```
 
-**PASS**. CDG counts remain 4692/14548/52692 for p=1/2/4; separated U/D is
-acyclic and p=2/4 retain collapsed witnesses. The selector passes. All four
-prior fixed/adaptive gem5 cases report 1/1 packets.
+Results: build PASS (only optional PNG/HDF5 warnings); topology 8/8; Phase 02
+12/12; Phase 03 10/10; Phase 04 5/5; adaptive C++ selector PASS. CDG remains
+4692/14548/52692 routes for p1/p2/p4, U/D separated acyclic, p2/p4 collapsed
+witnesses present. Logs are under `m5out/sumcheck_phase04/regressions/`.
 
-### Ring and Wormhole
+Prior fixed/adaptive two-case smokes PASS at 1/1 each. Ring single-packet PASS
+at 1/1 and average hops 8. The Wormhole probe is retained under
+`regressions/wormhole_probe/` and still exits on `unrecognized arguments:
+--wormhole`; no Wormhole pass or integration is claimed.
+
+## Required causal variant smokes
+
+Command:
 
 ```bash
-./build/NULL/gem5.debug \
-  --outdir=m5out/sumcheck_phase03/ring_single_packet \
-  configs/example/garnet_synth_traffic.py \
-  --network=garnet --num-cpus=16 --num-dirs=16 --topology=Ring \
-  --mesh-rows=1 --routing-algorithm=2 --inj-vnet=0 \
-  --synthetic=uniform_random --sim-cycles=500 --injectionrate=1.0 \
-  --num-packets-max=1 --single-sender-id=0 --single-dest-id=8
+bash scripts/run_sumcheck_smoke.sh m5out/sumcheck_phase04/smoke
 ```
 
-Ring **PASS**: 1/1 packets and flits, average hops 8.
+All eight variants PASS. Seven aggregated cases have 2004 injected/received;
+no-aggregation has 1856/1856. Total across smokes: 15884 packets and 81040
+flits, with zero failed/timeout/accounting-mismatch runs.
 
-The `--vcs-per-vnet=16 --wormhole` probe under
-`m5out/sumcheck_phase03/wormhole_probe/` reproduces the inherited parser exit
-`unrecognized arguments: --wormhole`. No Wormhole pass is claimed and no branch
-integration was attempted.
+| Variant | Completion cycles | Mean/P95/P99 latency cycles | Avg hops |
+|---|---:|---:|---:|
+| Mesh_8x8_XY | 2427 | 26.12/50/54 | 1.548 |
+| Hierarchy_p1_fixed | 3745 | 44.67/103/115 | 2.196 |
+| Hierarchy_p2_fixed | 2945 | 34.08/65/88 | 1.776 |
+| Hierarchy_p4_fixed | 2638 | 27.54/49/85 | 1.169 |
+| Hierarchy_p4_adaptive | 2638 | 27.70/49/84 | 1.233 |
+| p4 adaptive lower buffer bracket | 2638 | 27.70/49/84 | 1.233 |
+| Hierarchy_p4_corners | 2596 | 27.97/50/81 | 1.401 |
+| Hierarchy_p4_no_aggregation | 8988 | 162.58/405/433 | 2.750 |
 
-## Remaining risks/limits
+These are one-seed smokes, not formal multi-seed performance conclusions.
 
-1. The reference bundle is unavailable, so JSONL cannot be byte-compared with
-   its intended generator; counts/dependencies/sizes are independently derived.
-2. Aggregation compute is one endpoint cycle and the manager is not modeled as
-   hardware area; later work may need calibrated/configurable compute latency.
-3. Generated worker sequencer/cache objects are idle framework overhead.
-4. Percentiles, multi-seed sweeps, saturation, cost comparison, and plots are
-   intentionally deferred to Phase 04.
-5. The watchdog identifies pending events/endpoints/dependencies but does not
-   dump every router input VC and waited allocator resource.
-6. Wormhole remains branch-separated and needs separately authorized,
-   conflict-aware integration/testing.
+## Actually executed representative sweep
 
-## Exact next action
+```bash
+bash scripts/run_sumcheck_sweep.sh m5out/sumcheck_phase04/sweep
+python3 scripts/collect_sumcheck_results.py \
+  m5out/sumcheck_phase04/sweep \
+  --output-dir m5out/sumcheck_phase04/results/representative_sweep
+```
 
-Proceed only to `tasks/04_baselines_experiments.md`: use the causal workload for
-Mesh/placement/aggregation baselines and bounded experiment automation. Do not
-begin Phase 05 final review yet.
+Executed 40/40 points: uniform/skewed-bursty x load 0.01/0.08 x
+fixed/adaptive x seeds 1..5, 200 release cycles. All 23172 packets and 116172
+flits were received; failures/timeouts/accounting mismatches: zero.
+
+Five-seed means (accepted packets/network-cycle; latency cycles):
+
+| Traffic/load | Fixed throughput/latency | Adaptive throughput/latency |
+|---|---:|---:|
+| uniform 0.01 | 0.4966/29.47 | 0.4966/29.60 |
+| uniform 0.08 | 0.6378/646.27 | 0.6309/648.71 |
+| skewed-bursty 0.01 | 0.2589/125.63 | 0.2585/125.89 |
+| skewed-bursty 0.08 | 0.2823/1451.80 | 0.2824/1451.94 |
+
+The bounded results show no adaptive performance benefit; they are retained
+as a negative result. Load 0.08 shows a throughput plateau and sharply higher
+latency, but the precise saturation threshold is not located by two points.
+An exact repeat of skewed-bursty load 0.08/adaptive/seed 1 produced a
+byte-identical trace (SHA-256 `d706a07b49c474c96826c594eda7adaa1e462de0312737e14820c8c0957373c1`)
+and report under `m5out/sumcheck_phase04/repro/`.
+
+Raw/summarized evidence:
+
+- `m5out/sumcheck_phase04/{smoke,sweep}/...` per-run artifacts;
+- `m5out/sumcheck_phase04/results/smoke/{results.json,results.csv,summary.csv,costs.json}`;
+- `m5out/sumcheck_phase04/results/representative_sweep/{results.json,results.csv,summary.csv,costs.json}`;
+- `docs/sumcheck_phase04_experiments.md` interpretation and reproduction;
+- `m5out/sumcheck_phase04/failures.json` discloses two overwritten development
+  preflight failures; accepted smoke/sweep failure lists are empty.
+
+## Remaining experiment gaps / exact next action
+
+1. The prepared full matrix was **not executed**:
+
+   ```bash
+   bash scripts/run_sumcheck_full_matrix.sh \
+     m5out/sumcheck_phase04/full_matrix
+   ```
+
+   It is resumable and includes five causal seeds for all variants plus nine
+   loads (0.005..0.16), two traffic cases, two routing policies, and 2000
+   release cycles.
+2. Therefore precise saturation points and formal five-seed causal comparisons
+   for every ablation remain unmeasured; no values were invented.
+3. Allocator buffer/VC stall counters are unavailable in this Garnet revision.
+   Endpoint MessageBuffer stall-time remains in raw stats; collected JSON marks
+   allocator stalls `null`.
+4. Long-link latency 2/4 sensitivities are parameterized but not executed in
+   the bounded subset.
+5. Reference bundle and Wormhole integration remain unavailable.
+
+Proceed next only to the Phase-05 final evidence/documentation audit, or run
+the prepared full matrix first if more experiment time is authorized.

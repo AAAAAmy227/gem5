@@ -88,6 +88,18 @@ def define_options(parser):
             inside garnet network.""",
     )
     parser.add_argument(
+        "--buffers-per-data-vc",
+        type=int,
+        default=4,
+        help="Garnet slots in each data VC",
+    )
+    parser.add_argument(
+        "--buffers-per-ctrl-vc",
+        type=int,
+        default=1,
+        help="Garnet slots in each control VC",
+    )
+    parser.add_argument(
         "--routing-algorithm",
         action="store",
         type=int,
@@ -213,6 +225,8 @@ def init_network(options, network, InterfaceClass):
             fatal("--entry-congestion-weight must be non-negative")
         network.num_rows = options.mesh_rows
         network.vcs_per_vnet = options.vcs_per_vnet
+        network.buffers_per_data_vc = options.buffers_per_data_vc
+        network.buffers_per_ctrl_vc = options.buffers_per_ctrl_vc
         network.ni_flit_size = options.link_width_bits / 8
         network.routing_algorithm = options.routing_algorithm
         network.entries_per_cluster = options.entries_per_cluster

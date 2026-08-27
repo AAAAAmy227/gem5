@@ -232,6 +232,7 @@ class GarnetNetwork : public Network
     statistics::Formula m_sumcheck_adaptive_reroute_rate;
     statistics::Vector m_sumcheck_vc_allocations;
     statistics::Vector m_sumcheck_tracked_link_flits;
+    statistics::Vector m_sumcheck_all_link_flits;
 
     std::vector<std::vector<statistics::Scalar *>> m_data_traffic_distribution;
     std::vector<std::vector<statistics::Scalar *>> m_ctrl_traffic_distribution;

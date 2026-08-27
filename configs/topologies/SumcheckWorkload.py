@@ -9,6 +9,7 @@ from dataclasses import dataclass
 import hashlib
 import json
 from pathlib import Path
+import random
 
 from topologies.SumcheckConfig import (
     NUM_CLUSTERS,
@@ -40,13 +41,13 @@ class TraceEvent:
     round_index: int
     kind: str
     depends_on: tuple[str, ...]
+    release_cycle: int = 0
 
     def wire_record(self) -> str:
         """Serialize to the deliberately simple C++ SimObject parameter form."""
 
         dependencies = ",".join(self.depends_on)
-        return ";".join(
-            (
+        fields = (
                 self.event_id,
                 str(self.source),
                 str(self.destination),
@@ -56,7 +57,9 @@ class TraceEvent:
                 self.kind,
                 dependencies,
             )
-        )
+        if self.release_cycle:
+            fields += (str(self.release_cycle),)
+        return ";".join(fields)
 
     def json_record(self) -> dict:
         return {
@@ -68,6 +71,7 @@ class TraceEvent:
             "round": self.round_index,
             "kind": self.kind,
             "depends_on": list(self.depends_on),
+            "release_cycle": self.release_cycle,
         }
 
 
@@ -84,6 +88,7 @@ class _TraceBuilder:
         round_index: int,
         kind: str,
         depends_on=(),
+        release_cycle=0,
     ) -> str:
         event_id = f"e{len(self.events):04d}"
         event = TraceEvent(
@@ -95,6 +100,7 @@ class _TraceBuilder:
             round_index,
             kind,
             tuple(depends_on),
+            release_cycle,
         )
         self.events.append(event)
         return event_id
@@ -209,53 +215,30 @@ def build_aggregated_trace(entries_per_cluster, entry_placement=STAGGERED):
             )
         previous_challenge = next_challenge
 
-    # A -> B boundary: non-entry terminal states eject at an entry; each
-    # entry then emits a fresh state packet to its gateway controller.
-    entry_terminal = {}
+    # A -> B boundary: retain one terminal-state packet per worker. Its
+    # worker->gateway route passes through the assigned entry. The reference
+    # full-trace oracle counts all 16 packets on each entry->gateway cut.
+    gateway_terminal = {}
     for cluster in range(NUM_CLUSTERS):
-        groups = _entry_groups(cluster, entries_per_cluster, entry_placement)
-        for entry_index, workers in groups.items():
-            entry = entry_router(
-                cluster,
-                entry_index,
-                entries_per_cluster,
-                entry_placement,
-            )
-            terminal_inputs = []
-            for worker in workers:
-                if worker == entry:
-                    continue
-                terminal_inputs.append(
-                    builder.add(
-                        worker,
-                        entry,
-                        PARTIAL_BYTES,
-                        "AB",
-                        PHASE_A_ROUNDS,
-                        "worker_terminal_state",
-                        (previous_challenge[worker],),
-                    )
-                )
-            dependencies = terminal_inputs + [previous_challenge[entry]]
-            entry_terminal[(cluster, entry_index)] = builder.add(
-                entry,
+        base = cluster * WORKERS_PER_CLUSTER
+        gateway_terminal[cluster] = []
+        for worker in range(base, base + WORKERS_PER_CLUSTER):
+            gateway_terminal[cluster].append(builder.add(
+                worker,
                 gateway_id(cluster),
                 PARTIAL_BYTES,
                 "AB",
                 PHASE_A_ROUNDS,
-                "entry_terminal_aggregate",
-                dependencies,
-            )
+                "worker_terminal_state",
+                (previous_challenge[worker],),
+            ))
 
     previous_gateway_challenge = {}
     for round_index in range(PHASE_B_ROUNDS):
         gateway_partials = []
         for cluster in range(NUM_CLUSTERS):
             if round_index == 0:
-                dependencies = [
-                    entry_terminal[(cluster, index)]
-                    for index in range(entries_per_cluster)
-                ]
+                dependencies = gateway_terminal[cluster]
             else:
                 dependencies = [previous_gateway_challenge[cluster]]
             gateway_partials.append(
@@ -301,6 +284,74 @@ def build_aggregated_trace(entries_per_cluster, entry_placement=STAGGERED):
             f"aggregated trace has {len(events)} events, expected "
             f"{AGGREGATED_EVENT_COUNT}"
         )
+    return events
+
+
+def build_synthetic_trace(
+    traffic,
+    offered_load,
+    seed,
+    cycles,
+    burst_period=20,
+    burst_on_cycles=5,
+):
+    """Build deterministic open-loop 64-worker offered-traffic events."""
+
+    if traffic not in ("uniform-random", "cluster-skewed-bursty"):
+        raise ValueError(f"unsupported synthetic traffic {traffic}")
+    if not 0.0 < offered_load <= 1.0:
+        raise ValueError("offered load must be in (0, 1]")
+    if cycles <= 0:
+        raise ValueError("synthetic cycles must be positive")
+    if burst_period <= 0 or not 0 < burst_on_cycles <= burst_period:
+        raise ValueError("invalid burst period/on-cycle configuration")
+
+    rng = random.Random(seed)
+    builder = _TraceBuilder()
+    duty = burst_on_cycles / burst_period
+    on_probability = min(1.0, offered_load / duty)
+    for cycle in range(cycles):
+        burst_on = cycle % burst_period < burst_on_cycles
+        for source in range(NUM_WORKERS):
+            probability = offered_load
+            if traffic == "cluster-skewed-bursty":
+                if not burst_on:
+                    continue
+                probability = on_probability
+            if rng.random() >= probability:
+                continue
+
+            if traffic == "uniform-random":
+                destination = rng.randrange(NUM_WORKERS - 1)
+                if destination >= source:
+                    destination += 1
+            else:
+                source_cluster = source // WORKERS_PER_CLUSTER
+                if rng.random() < 0.8:
+                    hot_cluster = 0 if source_cluster != 0 else 1
+                    destination = (
+                        hot_cluster * WORKERS_PER_CLUSTER
+                        + rng.randrange(WORKERS_PER_CLUSTER)
+                    )
+                else:
+                    destination = rng.randrange(NUM_WORKERS - 1)
+                    if destination >= source:
+                        destination += 1
+
+            builder.add(
+                source,
+                destination,
+                PARTIAL_BYTES if rng.random() < 0.5 else FIELD_BYTES,
+                "SYNTH",
+                cycle,
+                traffic.replace("-", "_"),
+                release_cycle=cycle + 1,
+            )
+
+    events = tuple(builder.events)
+    validate_trace(events)
+    if not events:
+        raise ValueError("synthetic configuration generated no packets")
     return events
 
 
@@ -376,6 +427,8 @@ def validate_trace(events):
             raise ValueError(f"event {event.event_id} is not a network message")
         if event.size_bytes not in (FIELD_BYTES, PARTIAL_BYTES):
             raise ValueError(f"event {event.event_id} has invalid byte size")
+        if event.release_cycle < 0:
+            raise ValueError(f"event {event.event_id} has invalid release")
         positions[event.event_id] = index
 
     for index, event in enumerate(events):

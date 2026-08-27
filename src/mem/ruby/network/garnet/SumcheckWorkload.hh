@@ -47,6 +47,7 @@ class SumcheckWorkload : public ClockedObject
         bool arrived = false;
         Tick injectedAt = 0;
         Tick arrivedAt = 0;
+        Cycles releaseCycle = Cycles(0);
     };
 
     void parseAndValidate(const std::vector<std::string> &records);
@@ -80,6 +81,7 @@ class SumcheckWorkload : public ClockedObject
     uint64_t arrivalTriggeredInjections;
     uint64_t traceDigest;
     uint64_t injectionDigest;
+    std::vector<uint64_t> packetLatencyCycles;
     int phaseCLocalRound;
 };
 

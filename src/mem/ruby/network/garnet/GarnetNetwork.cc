@@ -717,6 +717,16 @@ GarnetNetwork::regStats()
         m_sumcheck_tracked_link_flits.subname(
             index, m_sumcheck_tracked_link_names[index]);
     }
+    m_sumcheck_all_link_flits
+        .init(std::max(1, static_cast<int>(m_networklinks.size())))
+        .name(name() + ".sumcheck_all_link_flits")
+        .flags(statistics::nozero)
+        .unit(statistics::units::Count::get())
+        ;
+    if (m_networklinks.empty())
+        m_sumcheck_all_link_flits.subname(0, "none");
+    for (int index = 0; index < m_networklinks.size(); ++index)
+        m_sumcheck_all_link_flits.subname(index, csprintf("link%d", index));
 
     // Traffic distribution
     for (int source = 0; source < m_routers.size(); ++source) {
@@ -751,6 +761,7 @@ GarnetNetwork::collateStats()
     for (int i = 0; i < m_networklinks.size(); i++) {
         link_type type = m_networklinks[i]->getType();
         int activity = m_networklinks[i]->getLinkUtilization();
+        m_sumcheck_all_link_flits[i] = activity;
 
         if (type == EXT_IN_)
             m_total_ext_in_link_utilization += activity;

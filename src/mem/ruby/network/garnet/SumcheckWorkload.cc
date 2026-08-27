@@ -1,8 +1,10 @@
 #include "mem/ruby/network/garnet/SumcheckWorkload.hh"
 
 #include <algorithm>
+#include <cmath>
 #include <fstream>
 #include <iomanip>
+#include <numeric>
 #include <sstream>
 
 #include "base/logging.hh"
@@ -77,7 +79,7 @@ SumcheckWorkload::parseAndValidate(const std::vector<std::string> &records)
     events.reserve(records.size());
     for (size_t index = 0; index < records.size(); ++index) {
         const auto fields = split(records[index], ';');
-        fatal_if(fields.size() != 7 && fields.size() != 8,
+        fatal_if(fields.size() < 7 || fields.size() > 9,
                  "Malformed Sumcheck event record %d", index);
         Event event;
         event.id = fields[0];
@@ -89,6 +91,11 @@ SumcheckWorkload::parseAndValidate(const std::vector<std::string> &records)
         event.kind = fields[6];
         if (fields.size() == 8 && !fields[7].empty())
             event.dependencyIds = split(fields[7], ',');
+        if (fields.size() == 9) {
+            if (!fields[7].empty())
+                event.dependencyIds = split(fields[7], ',');
+            event.releaseCycle = Cycles(std::stoull(fields[8]));
+        }
 
         fatal_if(event.id.empty(), "Sumcheck event %d has no ID", index);
         fatal_if(eventIndex.count(event.id),
@@ -142,9 +149,18 @@ void
 SumcheckWorkload::injectReady()
 {
     const std::vector<size_t> ready(pendingReady.begin(), pendingReady.end());
-    pendingReady.clear();
-    for (size_t index : ready)
-        inject(index);
+    Tick nextRelease = MaxTick;
+    for (size_t index : ready) {
+        const Tick release = cyclesToTicks(events[index].releaseCycle);
+        if (curTick() >= release) {
+            pendingReady.erase(index);
+            inject(index);
+        } else {
+            nextRelease = std::min(nextRelease, release);
+        }
+    }
+    if (nextRelease != MaxTick && !injectionEvent.scheduled())
+        schedule(injectionEvent, nextRelease);
 }
 
 void
@@ -202,6 +218,8 @@ SumcheckWorkload::notifyArrival(uint64_t event_id, int destination_ni)
 
     event.arrived = true;
     event.arrivedAt = curTick();
+    packetLatencyCycles.push_back(
+        ticksToCycles(event.arrivedAt - event.injectedAt));
     ++packetsReceived;
     flitsReceived += (event.bytes + flitBytes - 1) / flitBytes;
     lastProgress = curTick();
@@ -220,6 +238,10 @@ SumcheckWorkload::notifyArrival(uint64_t event_id, int destination_ni)
     }
 
     if (packetsReceived == events.size()) {
+        if (mode.rfind("synthetic-", 0) == 0) {
+            finish();
+            return;
+        }
         // Phase C contains two root-local rounds and deliberately injects no
         // messages.  Model one controller cycle for each before completion.
         schedule(localPhaseEvent, clockEdge(Cycles(1)));
@@ -287,6 +309,14 @@ SumcheckWorkload::finish()
              "Sumcheck completion accounting mismatch");
     std::ofstream output(reportFile);
     fatal_if(!output, "Cannot open Sumcheck report %s", reportFile);
+    std::sort(packetLatencyCycles.begin(), packetLatencyCycles.end());
+    const auto percentile = [this](double fraction) {
+        const size_t index = static_cast<size_t>(
+            std::ceil(fraction * packetLatencyCycles.size())) - 1;
+        return packetLatencyCycles.at(index);
+    };
+    const uint64_t latencySum = std::accumulate(
+        packetLatencyCycles.begin(), packetLatencyCycles.end(), uint64_t{0});
     output << "{\n"
            << "  \"mode\": \"" << mode << "\",\n"
            << "  \"seed\": " << seed << ",\n"
@@ -302,6 +332,17 @@ SumcheckWorkload::finish()
            << "  \"endpoint_ejections\": " << packetsReceived << ",\n"
            << "  \"flit_bytes\": " << flitBytes << ",\n"
            << "  \"completion_tick\": " << curTick() << ",\n"
+           << "  \"completion_cycle\": " << curCycle() << ",\n"
+           << "  \"accepted_throughput_packets_per_cycle\": "
+           << static_cast<double>(packetsReceived) /
+                  std::max<uint64_t>(1, curCycle()) << ",\n"
+           << "  \"mean_packet_latency_cycles\": "
+           << static_cast<double>(latencySum) / packetLatencyCycles.size()
+           << ",\n"
+           << "  \"p95_packet_latency_cycles\": " << percentile(0.95)
+           << ",\n"
+           << "  \"p99_packet_latency_cycles\": " << percentile(0.99)
+           << ",\n"
            << "  \"phase_c_local_rounds\": " << phaseCLocalRound << ",\n"
            << "  \"trace_digest_fnv64\": \"" << std::hex
            << traceDigest << "\",\n"
