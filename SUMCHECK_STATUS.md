@@ -15,11 +15,13 @@
 ## Repository state
 
 - Worktree: `/root/gem5`, branch `sumcheck`.
-- HEAD: `85fe5e0c9ab189825be96a78ea513a180da6a189`
-  (`sumcheck: complete phase 03 causal workload`).
-- Phase-04 changes are unstaged and uncommitted.
-- No commit, push, merge, rebase, cherry-pick, amend, branch switch, reset, or
-  clean was performed.
+- Phase-04 implementation commit: `02b09e0`
+  (`sumcheck: complete phase 04 baselines and experiments`).
+- The worktree is expected to be clean after this handoff-status correction
+  is committed; ignored `m5out/sumcheck_phase04/` evidence remains local.
+- The user explicitly authorized the Phase-04 commits after experiments
+  completed. No push, merge, rebase, cherry-pick, amend, branch switch, reset,
+  or clean was performed.
 
 ## Phase-04 implementation
 
