@@ -110,14 +110,17 @@ the clean baseline, and do not use fixed-cycle termination for a Sumcheck
 
 ## Workload API facts established for Phase 3
 
-- The physical network can host 69 controllers/ExtLinks/NIs, but the current
-  Garnet standalone config creates `num_cpus` L1 controllers plus
-  `num_dirs` directory controllers and only sends L1→Directory traffic. It
-  is not a ready-made 69-role Sumcheck endpoint system.
-- A Phase-1 topology smoke can use 65 L1 endpoints plus 4 directories (69
-  ExtLinks total), mapping L1 0..63 to workers, L1 64 to root, and four
-  directories to gateways. This is only a smoke harness, not final Sumcheck
-  controller semantics.
+- The physical network can host the 69 logical endpoints, but Garnet
+  standalone creates `num_cpus` L1 controllers plus `num_dirs` Directory
+  controllers and only sends L1→Directory traffic. This build's MachineID
+  set also rejects 65 same-type L1 controllers, and the Directory count must
+  remain a power of two. It is not a ready-made 69-role endpoint system.
+- The working Phase-1 harness therefore uses 64 L1s plus 8 Directories (72
+  ExtLinks/NIs): L1 0..62 map to workers 0..62, L1 63 maps to root,
+  Directory 0 maps to worker 63, Directories 1..4 map to G0..G3, and
+  Directories 5..7 are explicitly co-located on root. The three extras add
+  real local ports, NIs, ExtLinks, buffers, and arbitration cost. This is
+  only a smoke harness, not final Sumcheck controller semantics.
 - Final causal replay needs a custom endpoint/controller or protocol extension
   whose destination-side consumer can identify an event ID and notify the
   workload manager after ejection. The manager may schedule a successor only
@@ -152,7 +155,7 @@ the clean baseline, and do not use fixed-cycle termination for a Sumcheck
 |---|---|---|---|---|
 | Keep Lab3 Ring and add Sumcheck routing | Algorithm 2 is already Ring custom routing | Add a distinct Sumcheck routing enum/value and leave algorithm 2 unchanged | Prevents a Sumcheck build from silently breaking Ring | Phase-0 Ring smoke; `RoutingUnit.cc:263-292` |
 | 69-router custom mapping | XY helper requires a rectangular `num_rows*num_cols` | Leave `mesh_rows=0`; classify IDs with centralized Sumcheck helpers | Custom routing must not call `getNumCols()`/XY | `GarnetNetwork.cc:124-135` |
-| 64 workers + 5 controller endpoints | Garnet standalone only supplies L1→Directory semantics | Use a documented 65-L1+4-directory Phase-1 smoke; build a custom causal controller path in Phase 3 | Smoke endpoint types are not final aggregation semantics | `Garnet_standalone.py`; API inspection above |
+| 64 workers + 5 controller endpoints | Garnet standalone only supplies L1→Directory semantics; 65 L1s exceed the 64-bit MachineID set and Directory count must be a power of two | Use the documented 64-L1+8-Directory Phase-1 harness above; build a custom causal controller path in Phase 3 | Three extra root-co-located endpoints are real cost; smoke endpoint types are not final aggregation semantics | Initial 65-L1 smoke fatal; passing two-case 64+8 smoke under `m5out/sumcheck_phase01/deterministic_smoke/` |
 | 32 B and 128 B packets | Current enum yields 8 B or normally 72 B | Add exact message byte-size support in the Sumcheck message path | Required for correct flit counts and reference path oracles | `Network.cc:163-189`; `NetworkInterface.cc:377-386` |
 | Dependency fires on packet arrival | Synthetic tester callback is immediate protocol callback | Observe destination NI enqueue/custom controller consumption | Prevents pseudo-causal replay | `GarnetSyntheticTraffic.cc:259-274`; NI ejection code |
 | Per-link utilization and P95/P99 | Only aggregate link utilization and latency sums/means are exported | Add keyed per-link counters and workload-side latency samples | Required formal metrics; no Phase-0 measured claim | stats code inspection |

@@ -32,9 +32,11 @@
 
 #include "base/cast.hh"
 #include "base/compiler.hh"
+#include "base/logging.hh"
 #include "debug/RubyNetwork.hh"
 #include "mem/ruby/network/garnet/InputUnit.hh"
 #include "mem/ruby/network/garnet/Router.hh"
+#include "mem/ruby/network/garnet/SumcheckConfig.hh"
 #include "mem/ruby/slicc_interface/Message.hh"
 
 namespace gem5
@@ -193,8 +195,10 @@ RoutingUnit::outportCompute(RouteInfo route, int inport,
         // any custom algorithm
         case CUSTOM_: outport =
             outportComputeCustom(route, inport, inport_dirn); break;
-        default: outport =
-            lookupRoutingTable(route.vnet, route.net_dest); break;
+        case SUMCHECK_: outport =
+            outportComputeSumcheck(route, inport, inport_dirn); break;
+        default:
+            fatal("Unsupported Garnet routing algorithm %d", routing_algorithm);
     }
 
     assert(outport != -1);
@@ -289,6 +293,107 @@ RoutingUnit::outportComputeCustom(RouteInfo route,
     return m_outports_dirn2idx[outport_dirn];
     
     panic("%s placeholder executed", __FUNCTION__);
+}
+
+int
+RoutingUnit::outportForDirection(const PortDirection &direction) const
+{
+    const auto outport = m_outports_dirn2idx.find(direction);
+    fatal_if(outport == m_outports_dirn2idx.end(),
+             "Router %d has no Sumcheck output direction '%s'",
+             m_router->get_id(), direction.c_str());
+    return outport->second;
+}
+
+int
+RoutingUnit::outportComputeSumcheck(RouteInfo route,
+                                    int inport,
+                                    PortDirection inport_dirn)
+{
+    using namespace sumcheck;
+
+    const int current = m_router->get_id();
+    const int source = route.src_router;
+    const int destination = route.dest_router;
+    fatal_if(!isRouter(current) || !isRouter(source) ||
+             !isRouter(destination),
+             "Invalid Sumcheck route src=%d current=%d dest=%d",
+             source, current, destination);
+    fatal_if(current == destination,
+             "Sumcheck custom routing called at destination router %d",
+             current);
+
+    const auto *network = m_router->get_net_ptr();
+    const unsigned entry_count = network->getEntriesPerCluster();
+    const bool corners = network->getEntryPlacement() == "corners";
+    PortDirection direction = "Unknown";
+
+    auto meshDirection = [](int from, int to) -> PortDirection {
+        fatal_if(!isWorker(from) || !isWorker(to) ||
+                 workerCluster(from) != workerCluster(to),
+                 "Illegal Sumcheck mesh route %d->%d", from, to);
+        const Coord current_coord = workerCoord(from);
+        const Coord destination_coord = workerCoord(to);
+        if (current_coord.row < destination_coord.row)
+            return "Dim0Pos";
+        if (current_coord.row > destination_coord.row)
+            return "Dim0Neg";
+        if (current_coord.col < destination_coord.col)
+            return "Dim1Pos";
+        if (current_coord.col > destination_coord.col)
+            return "Dim1Neg";
+        fatal("Sumcheck mesh route requested at destination router %d", from);
+    };
+
+    if (isWorker(current)) {
+        const int cluster = workerCluster(current);
+        if (isWorker(destination) &&
+            workerCluster(destination) == cluster) {
+            direction = meshDirection(current, destination);
+        } else {
+            fatal_if(!isWorker(source) || workerCluster(source) != cluster,
+                     "Illegal non-local Sumcheck route src=%d current=%d "
+                     "dest=%d inport=%s",
+                     source, current, destination, inport_dirn.c_str());
+            const int entry_index = nearestEntryIndex(
+                source, entry_count, corners);
+            const int assigned_entry = workerId(
+                cluster, entryTable(entry_count, corners)[entry_index]);
+            direction = current == assigned_entry ?
+                PortDirection("Gateway") :
+                meshDirection(current, assigned_entry);
+        }
+    } else if (isGateway(current)) {
+        const int cluster = gatewayCluster(current);
+        if (isWorker(destination) &&
+            workerCluster(destination) == cluster) {
+            const int entry_index = nearestEntryIndex(
+                destination, entry_count, corners);
+            direction = "Entry" + std::to_string(entry_index);
+        } else if (isRoot(destination) ||
+                   (isGateway(destination) && destination != current) ||
+                   (isWorker(destination) &&
+                    workerCluster(destination) != cluster)) {
+            direction = "RootUp";
+        } else {
+            fatal("Unsupported Sumcheck route at gateway %d: src=%d dest=%d",
+                  current, source, destination);
+        }
+    } else if (isRoot(current)) {
+        int destination_cluster = -1;
+        if (isWorker(destination))
+            destination_cluster = workerCluster(destination);
+        else if (isGateway(destination))
+            destination_cluster = gatewayCluster(destination);
+        else
+            fatal("Unsupported Sumcheck route at root: src=%d dest=%d",
+                  source, destination);
+        direction = "RootToG" + std::to_string(destination_cluster);
+    } else {
+        fatal("Unsupported Sumcheck router role at router %d", current);
+    }
+
+    return outportForDirection(direction);
 }
 
 } // namespace garnet

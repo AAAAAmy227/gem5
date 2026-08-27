@@ -95,7 +95,35 @@ def define_options(parser):
         help="""routing algorithm in network.
             0: weight-based table
             1: XY (for Mesh. see garnet/RoutingUnit.cc)
-            2: Custom (see garnet/RoutingUnit.cc""",
+            2: Custom Ring (see garnet/RoutingUnit.cc)
+            3: SumcheckHierarchy fixed routing""",
+    )
+    parser.add_argument(
+        "--entries-per-cluster",
+        type=int,
+        choices=(1, 2, 4),
+        default=4,
+        help="number of Sumcheck gateway entry routers per cluster",
+    )
+    parser.add_argument(
+        "--entry-placement",
+        choices=("staggered", "corners"),
+        default="staggered",
+        help="Sumcheck entry placement; corners is valid only for p=4",
+    )
+    parser.add_argument(
+        "--gateway-entry-link-latency",
+        type=int,
+        choices=(1, 2, 4),
+        default=1,
+        help="latency of Sumcheck gateway-entry links",
+    )
+    parser.add_argument(
+        "--root-gateway-link-latency",
+        type=int,
+        choices=(1, 2, 4),
+        default=1,
+        help="latency of Sumcheck root-gateway links",
     )
     parser.add_argument(
         "--network-fault-model",
@@ -168,6 +196,8 @@ def init_network(options, network, InterfaceClass):
         network.vcs_per_vnet = options.vcs_per_vnet
         network.ni_flit_size = options.link_width_bits / 8
         network.routing_algorithm = options.routing_algorithm
+        network.entries_per_cluster = options.entries_per_cluster
+        network.entry_placement = options.entry_placement
         network.garnet_deadlock_threshold = options.garnet_deadlock_threshold
 
         # Create Bridges and connect them to the corresponding links

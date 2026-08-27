@@ -35,6 +35,7 @@
 
 #include "base/cast.hh"
 #include "base/compiler.hh"
+#include "base/logging.hh"
 #include "debug/RubyNetwork.hh"
 #include "mem/ruby/common/NetDest.hh"
 #include "mem/ruby/network/MessageBuffer.hh"
@@ -44,6 +45,7 @@
 #include "mem/ruby/network/garnet/NetworkInterface.hh"
 #include "mem/ruby/network/garnet/NetworkLink.hh"
 #include "mem/ruby/network/garnet/Router.hh"
+#include "mem/ruby/network/garnet/SumcheckConfig.hh"
 #include "mem/ruby/system/RubySystem.hh"
 
 namespace gem5
@@ -70,7 +72,20 @@ GarnetNetwork::GarnetNetwork(const Params &p)
     m_buffers_per_data_vc = p.buffers_per_data_vc;
     m_buffers_per_ctrl_vc = p.buffers_per_ctrl_vc;
     m_routing_algorithm = p.routing_algorithm;
+    m_entries_per_cluster = p.entries_per_cluster;
+    m_entry_placement = p.entry_placement;
     m_next_packet_id = 0;
+
+    if (m_routing_algorithm == SUMCHECK_) {
+        const bool corners = m_entry_placement == "corners";
+        fatal_if(m_entry_placement != "staggered" && !corners,
+                 "Unknown Sumcheck entry placement '%s'",
+                 m_entry_placement.c_str());
+        fatal_if(!sumcheck::validEntryConfiguration(m_entries_per_cluster,
+                                                    corners),
+                 "Invalid Sumcheck entry configuration p=%u placement=%s",
+                 m_entries_per_cluster, m_entry_placement.c_str());
+    }
 
     m_enable_fault_model = p.enable_fault_model;
     if (m_enable_fault_model)
@@ -120,6 +135,14 @@ GarnetNetwork::init()
     // parent network constructor
     assert(m_topology_ptr != NULL);
     m_topology_ptr->createLinks(this);
+
+    if (getRoutingAlgorithm() == SUMCHECK_) {
+        fatal_if(m_routers.size() != sumcheck::NumRouters,
+                 "Sumcheck routing requires %d routers, found %d",
+                 sumcheck::NumRouters, static_cast<int>(m_routers.size()));
+        fatal_if(getNumRows() != 0,
+                 "Sumcheck routing requires num_rows/--mesh-rows to be zero");
+    }
 
     // Initialize topology specific parameters
     if (getNumRows() > 0) {
