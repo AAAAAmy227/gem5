@@ -254,6 +254,10 @@ NetworkInterface::wakeup()
                     iPort->sendCredit(cFlit);
                     // Update stats and delete flit pointer
                     incrementStats(t_flit);
+                    if (t_flit->get_msg_ptr()->hasSumcheckEventId()) {
+                        m_net_ptr->notifySumcheckArrival(
+                            t_flit->get_msg_ptr()->getSumcheckEventId(), m_id);
+                    }
                     delete t_flit;
                 } else {
                     // No space available- Place tail flit in stall queue and
@@ -343,6 +347,11 @@ NetworkInterface::checkStallQueue()
 
                     // Update Stats
                     incrementStats(stallFlit);
+                    if (stallFlit->get_msg_ptr()->hasSumcheckEventId()) {
+                        m_net_ptr->notifySumcheckArrival(
+                            stallFlit->get_msg_ptr()->getSumcheckEventId(),
+                            m_id);
+                    }
 
                     // Flit can now safely be deleted and removed from stall
                     // queue
@@ -379,12 +388,14 @@ NetworkInterface::flitisizeMessage(MsgPtr msg_ptr, int vnet)
     // This is expressed in terms of bytes/cycle or the flit size
     OutputPort *oPort = getOutportForVnet(vnet);
     assert(oPort);
-    int num_flits = (int)divCeil((float) m_net_ptr->MessageSizeType_to_int(
-        net_msg_ptr->getMessageSize()), (float)oPort->bitWidth());
+    const int message_bytes = net_msg_ptr->getMessageSizeBytes() > 0 ?
+        net_msg_ptr->getMessageSizeBytes() :
+        m_net_ptr->MessageSizeType_to_int(net_msg_ptr->getMessageSize());
+    int num_flits = (int)divCeil((float)message_bytes,
+                                (float)oPort->bitWidth());
 
     DPRINTF(RubyNetwork, "Message Size:%d vnet:%d bitWidth:%d\n",
-        m_net_ptr->MessageSizeType_to_int(net_msg_ptr->getMessageSize()),
-        vnet, oPort->bitWidth());
+        message_bytes, vnet, oPort->bitWidth());
 
     // loop to convert all multicast messages into unicast messages
     for (int ctr = 0; ctr < dest_nodes.size(); ctr++) {
@@ -442,8 +453,7 @@ NetworkInterface::flitisizeMessage(MsgPtr msg_ptr, int vnet)
             m_net_ptr->increment_injected_flits(vnet);
             flit *fl = new flit(packet_id,
                 i, vc, vnet, route, num_flits, new_msg_ptr,
-                m_net_ptr->MessageSizeType_to_int(
-                net_msg_ptr->getMessageSize()),
+                message_bytes,
                 oPort->bitWidth(), curTick());
 
             fl->set_src_delay(curTick() - msg_ptr->getTime());

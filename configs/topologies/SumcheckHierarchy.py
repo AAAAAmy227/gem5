@@ -34,12 +34,16 @@ class SumcheckHierarchy(SimpleTopology):
                 "SumcheckHierarchy requires --routing-algorithm=3 "
                 "(algorithm 2 remains reserved for Lab3 Ring)"
             )
-        if len(self.nodes) != len(CONTROLLER_TO_ROUTER):
+        if len(self.nodes) == NUM_ROUTERS:
+            # Phase-3 causal path: exact logical endpoint/NI/router identity.
+            controller_to_router = tuple(range(NUM_ROUTERS))
+        elif len(self.nodes) == len(CONTROLLER_TO_ROUTER):
+            # Preserve the earlier asymmetric Garnet synthetic smoke harness.
+            controller_to_router = CONTROLLER_TO_ROUTER
+        else:
             fatal(
-                "SumcheckHierarchy Phase-1 harness requires exactly 72 "
-                "controllers: 63 worker L1s, one root L1, and eight "
-                "Directories (one worker, four gateways, and three "
-                "root-co-located); "
+                "SumcheckHierarchy requires either the 69 exact causal "
+                "endpoints or the 72-controller legacy smoke harness; "
                 f"got {len(self.nodes)}"
             )
 
@@ -51,7 +55,7 @@ class SumcheckHierarchy(SimpleTopology):
 
         link_id = 0
         ext_links = []
-        for controller, router_id in zip(self.nodes, CONTROLLER_TO_ROUTER):
+        for controller, router_id in zip(self.nodes, controller_to_router):
             ext_links.append(
                 ExtLink(
                     link_id=link_id,

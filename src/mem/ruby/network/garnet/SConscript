@@ -36,9 +36,11 @@ SimObject('GarnetLink.py', enums=['CDCType'], sim_objects=[
     'GarnetExtLink'])
 SimObject('GarnetNetwork.py', sim_objects=[
     'GarnetNetwork', 'GarnetNetworkInterface', 'GarnetRouter'])
+SimObject('SumcheckWorkload.py', sim_objects=['SumcheckWorkload'])
 
 Source('GarnetLink.cc')
 Source('GarnetNetwork.cc')
+Source('SumcheckWorkload.cc')
 Source('InputUnit.cc')
 Source('NetworkInterface.cc')
 Source('NetworkLink.cc')

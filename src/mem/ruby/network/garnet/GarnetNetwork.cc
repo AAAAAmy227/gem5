@@ -46,6 +46,7 @@
 #include "mem/ruby/network/garnet/NetworkLink.hh"
 #include "mem/ruby/network/garnet/Router.hh"
 #include "mem/ruby/network/garnet/SumcheckConfig.hh"
+#include "mem/ruby/network/garnet/SumcheckWorkload.hh"
 #include "mem/ruby/system/RubySystem.hh"
 
 namespace gem5
@@ -76,6 +77,7 @@ GarnetNetwork::GarnetNetwork(const Params &p)
     m_entry_placement = p.entry_placement;
     m_sumcheck_adaptive = p.sumcheck_adaptive;
     m_entry_congestion_weight = p.entry_congestion_weight;
+    m_sumcheck_workload = p.sumcheck_workload;
     m_next_packet_id = 0;
 
     if (m_routing_algorithm == SUMCHECK_) {
@@ -127,6 +129,14 @@ GarnetNetwork::GarnetNetwork(const Params &p)
 
     // Print Garnet version
     inform("Garnet version %s\n", garnetVersion);
+}
+
+void
+GarnetNetwork::notifySumcheckArrival(uint64_t event_id, int destination_ni)
+{
+    fatal_if(m_sumcheck_workload == nullptr,
+             "Sumcheck-tagged packet arrived without a workload manager");
+    m_sumcheck_workload->notifyArrival(event_id, destination_ni);
 }
 
 void

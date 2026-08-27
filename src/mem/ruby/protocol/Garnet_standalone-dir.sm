@@ -34,6 +34,8 @@ machine(MachineType:Directory, "Garnet_standalone Directory")
             vnet_type = "forward";
       MessageBuffer * responseToDir, network="From", virtual_network="2",
             vnet_type = "response";
+      MessageBuffer * sumcheckFromDir, network="To", virtual_network="0",
+            vnet_type = "request";
 {
   // STATES
   state_declaration(State, desc="Directory states", default="Directory_State_I") {
@@ -83,6 +85,8 @@ machine(MachineType:Directory, "Garnet_standalone Directory")
   }
 
   // ** IN_PORTS **
+
+  out_port(sumcheckNetwork_out, RequestMsg, sumcheckFromDir);
 
   in_port(requestQueue_in, RequestMsg, requestToDir) {
     if (requestQueue_in.isReady(clockEdge())) {

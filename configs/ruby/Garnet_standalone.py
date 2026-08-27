@@ -55,6 +55,11 @@ def create_system(
     #
     assert dma_ports == []
 
+    if getattr(options, "sumcheck_causal", False):
+        return _create_sumcheck_causal_system(
+            options, system, ruby_system
+        )
+
     #
     # The ruby network creation expects the list of nodes in the system to be
     # consistent with the NetDest list.
@@ -98,6 +103,7 @@ def create_system(
         l1_cntrl.requestFromCache = MessageBuffer()
         l1_cntrl.responseFromCache = MessageBuffer()
         l1_cntrl.forwardFromCache = MessageBuffer()
+        l1_cntrl.sumcheckToCache = MessageBuffer()
 
     mem_dir_cntrl_nodes, rom_dir_cntrl_node = create_directories(
         options, bootmem, ruby_system, system
@@ -110,8 +116,59 @@ def create_system(
         dir_cntrl.requestToDir = MessageBuffer()
         dir_cntrl.forwardToDir = MessageBuffer()
         dir_cntrl.responseToDir = MessageBuffer()
+        dir_cntrl.sumcheckFromDir = MessageBuffer()
 
     all_cntrls = l1_cntrl_nodes + dir_cntrl_nodes
     ruby_system.network.number_of_virtual_networks = 3
     topology = create_topology(all_cntrls, options)
     return (cpu_sequencers, mem_dir_cntrl_nodes, topology)
+
+
+def _create_sumcheck_causal_system(options, system, ruby_system):
+    """Create one real NI/ExtLink endpoint for each of the 69 logical roles."""
+
+    if options.num_cpus != 64 or options.num_dirs != 5:
+        panic("causal Sumcheck requires 64 L1 endpoints and 5 controllers")
+
+    cpu_sequencers = []
+    l1_cntrl_nodes = []
+    injection_buffers = []
+    for i in range(64):
+        cache = L1Cache(size=options.l1d_size, assoc=options.l1d_assoc)
+        controller = L1Cache_Controller(
+            version=i, cacheMemory=cache, ruby_system=ruby_system
+        )
+        sequencer = RubySequencer(
+            dcache=cache, garnet_standalone=True, ruby_system=ruby_system
+        )
+        controller.sequencer = sequencer
+        controller.mandatoryQueue = MessageBuffer()
+        controller.requestFromCache = MessageBuffer(ordered=True)
+        controller.forwardFromCache = MessageBuffer()
+        controller.responseFromCache = MessageBuffer()
+        controller.sumcheckToCache = MessageBuffer(ordered=True)
+        setattr(ruby_system, f"l1_cntrl{i}", controller)
+        cpu_sequencers.append(sequencer)
+        l1_cntrl_nodes.append(controller)
+        injection_buffers.append(controller.requestFromCache)
+
+    dir_cntrl_nodes = []
+    for i in range(5):
+        controller = Directory_Controller(version=i, ruby_system=ruby_system)
+        controller.requestToDir = MessageBuffer(ordered=True)
+        controller.forwardToDir = MessageBuffer()
+        controller.responseToDir = MessageBuffer()
+        controller.sumcheckFromDir = MessageBuffer(ordered=True)
+        setattr(ruby_system, f"dir_cntrl{i}", controller)
+        dir_cntrl_nodes.append(controller)
+        injection_buffers.append(controller.sumcheckFromDir)
+
+    all_cntrls = l1_cntrl_nodes + dir_cntrl_nodes
+    system.sumcheck_workload.injection_buffers = injection_buffers
+    ruby_system.network.sumcheck_workload = system.sumcheck_workload
+    ruby_system.network.number_of_virtual_networks = 3
+    topology = create_topology(all_cntrls, options)
+
+    # No backing directory/memory is needed: the generated controllers only
+    # provide the protocol queues that terminate and originate network packets.
+    return (cpu_sequencers, [], topology)

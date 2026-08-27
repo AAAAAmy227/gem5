@@ -60,6 +60,9 @@ class GarnetNetwork(RubyNetwork):
     entry_congestion_weight = Param.Float(
         4.0, "Sumcheck adaptive entry congestion weight"
     )
+    sumcheck_workload = Param.SumcheckWorkload(
+        NULL, "optional causal Sumcheck arrival consumer"
+    )
     enable_fault_model = Param.Bool(False, "enable network fault model")
     fault_model = Param.FaultModel(NULL, "network fault model")
     garnet_deadlock_threshold = Param.UInt32(

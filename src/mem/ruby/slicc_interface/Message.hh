@@ -65,7 +65,9 @@ class Message
     Message(Tick curTime)
         : m_time(curTime),
           m_LastEnqueueTime(curTime),
-          m_DelayedTicks(0), m_msg_counter(0)
+          m_DelayedTicks(0), m_msg_counter(0),
+          m_sumcheck_event_id(0), m_has_sumcheck_event_id(false),
+          m_message_size_bytes(0)
     { }
 
     Message(const Message &other) = default;
@@ -110,6 +112,22 @@ class Message
     void setMsgCounter(uint64_t c) { m_msg_counter = c; }
     uint64_t getMsgCounter() const { return m_msg_counter; }
 
+    // Optional metadata used by the causal Sumcheck workload.  Zero exact
+    // bytes preserves the protocol's normal MessageSizeType conversion.
+    void setSumcheckEventId(uint64_t id)
+    {
+        m_sumcheck_event_id = id;
+        m_has_sumcheck_event_id = true;
+    }
+    bool hasSumcheckEventId() const { return m_has_sumcheck_event_id; }
+    uint64_t getSumcheckEventId() const
+    {
+        assert(m_has_sumcheck_event_id);
+        return m_sumcheck_event_id;
+    }
+    void setMessageSizeBytes(uint32_t bytes) { m_message_size_bytes = bytes; }
+    uint32_t getMessageSizeBytes() const { return m_message_size_bytes; }
+
     // Functions related to network traversal
     virtual const NetDest& getDestination() const
     { panic("getDestination() called on wrong message!"); }
@@ -126,6 +144,9 @@ class Message
     Tick m_LastEnqueueTime; // my last enqueue time
     Tick m_DelayedTicks; // my delayed cycles
     uint64_t m_msg_counter; // FIXME, should this be a 64-bit value?
+    uint64_t m_sumcheck_event_id;
+    bool m_has_sumcheck_event_id;
+    uint32_t m_message_size_bytes;
 
     // Variables for required network traversal
     int incoming_link;

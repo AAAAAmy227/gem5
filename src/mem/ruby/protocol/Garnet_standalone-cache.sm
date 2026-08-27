@@ -38,6 +38,8 @@ machine(MachineType:L1Cache, "Garnet_standalone L1 Cache")
             vnet_type = "forward";
       MessageBuffer * responseFromCache, network="To", virtual_network="2",
             vnet_type = "response";
+      MessageBuffer * sumcheckToCache, network="From", virtual_network="0",
+            vnet_type = "request";
 
       MessageBuffer * mandatoryQueue;
 {
@@ -52,6 +54,7 @@ machine(MachineType:L1Cache, "Garnet_standalone L1 Cache")
     Request,    desc="Request from Garnet_standalone";
     Forward,    desc="Forward from Garnet_standalone";
     Response,   desc="Response from Garnet_standalone";
+    Receive_Sumcheck, desc="Receive causal Sumcheck message";
   }
 
   // STRUCTURE DEFINITIONS
@@ -125,6 +128,15 @@ machine(MachineType:L1Cache, "Garnet_standalone L1 Cache")
   out_port(forwardNetwork_out, RequestMsg, forwardFromCache);
   out_port(responseNetwork_out, RequestMsg, responseFromCache);
 
+  in_port(sumcheckQueue_in, RequestMsg, sumcheckToCache) {
+    if (sumcheckQueue_in.isReady(clockEdge())) {
+      peek(sumcheckQueue_in, RequestMsg) {
+        trigger(Event:Receive_Sumcheck, in_msg.addr,
+                getCacheEntry(in_msg.addr));
+      }
+    }
+  }
+
   // Mandatory Queue
   in_port(mandatoryQueue_in, RubyRequest, mandatoryQueue, desc="...") {
     if (mandatoryQueue_in.isReady(clockEdge())) {
@@ -179,6 +191,10 @@ machine(MachineType:L1Cache, "Garnet_standalone L1 Cache")
     mandatoryQueue_in.dequeue(clockEdge());
   }
 
+  action(q_popSumcheckQueue, "q", desc="Consume an ejected Sumcheck packet") {
+    sumcheckQueue_in.dequeue(clockEdge());
+  }
+
   action(r_load_hit, "r", desc="Notify sequencer the load completed.") {
     sequencer.readCallback(address, dummyData);
   }
@@ -209,6 +225,10 @@ machine(MachineType:L1Cache, "Garnet_standalone L1 Cache")
     r_load_hit;
     b_issueForward;
     m_popMandatoryQueue;
+  }
+
+  transition(I, Receive_Sumcheck) {
+    q_popSumcheckQueue;
   }
 
 }

@@ -59,6 +59,7 @@ class Router;
 class NetworkLink;
 class NetworkBridge;
 class CreditLink;
+class SumcheckWorkload;
 
 class GarnetNetwork : public Network
 {
@@ -169,6 +170,7 @@ class GarnetNetwork : public Network
         const std::vector<int> &credits,
         const std::vector<int> &capacities);
     void recordSumcheckVcAllocation(sumcheck::VcClass vc_class);
+    void notifySumcheckArrival(uint64_t event_id, int destination_ni);
     int getNextPacketID() { return m_next_packet_id++; }
 
   protected:
@@ -185,6 +187,7 @@ class GarnetNetwork : public Network
     bool m_sumcheck_adaptive;
     double m_entry_congestion_weight;
     bool m_enable_fault_model;
+    SumcheckWorkload *m_sumcheck_workload;
 
     // Statistical variables
     statistics::Vector m_packets_received;

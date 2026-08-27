@@ -126,6 +126,11 @@ def define_options(parser):
 
 
 def setup_memory_controllers(system, ruby, dir_cntrls, options):
+    if not dir_cntrls:
+        # The causal Sumcheck endpoint harness uses protocol queues only and
+        # intentionally has no backing memory controllers.
+        return
+
     if options.numa_high_bit:
         block_size_bits = (
             options.numa_high_bit + 1 - int(math.log(options.num_dirs, 2))
