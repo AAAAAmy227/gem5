@@ -40,3 +40,5 @@ configs/dram/lowp_sweep.cfg
 /lab3_results
 /output
 /tmp
+/reference_md
+sumcheck_spec.md
