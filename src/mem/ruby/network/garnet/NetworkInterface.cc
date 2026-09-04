@@ -36,10 +36,13 @@
 #include <cmath>
 
 #include "base/cast.hh"
+#include "cpu/testers/sumcheck_causal_traffic/SumcheckCausalTraffic.hh"
 #include "debug/RubyNetwork.hh"
+#include "debug/SumcheckCausalTraffic.hh"
 #include "mem/ruby/network/MessageBuffer.hh"
 #include "mem/ruby/network/garnet/Credit.hh"
 #include "mem/ruby/network/garnet/flitBuffer.hh"
+#include "mem/ruby/protocol/RequestMsg.hh"
 #include "mem/ruby/slicc_interface/Message.hh"
 
 namespace gem5
@@ -56,7 +59,9 @@ NetworkInterface::NetworkInterface(const Params &p)
     m_virtual_networks(p.virt_nets), m_vc_per_vnet(0),
     m_vc_allocator(m_virtual_networks, 0),
     m_deadlock_threshold(p.garnet_deadlock_threshold),
-    vc_busy_counter(m_virtual_networks, 0)
+    vc_busy_counter(m_virtual_networks, 0),
+    sumcheckTesterSrc(p.sumcheck_tester_src),
+    sumcheckTesterWorker(p.sumcheck_tester_worker)
 {
     m_stall_count.resize(m_virtual_networks);
     niOutVcs.resize(0);
@@ -232,6 +237,14 @@ NetworkInterface::wakeup()
             DPRINTF(RubyNetwork, "Recieved flit:%s\n", *t_flit);
             assert(t_flit->m_width == iPort->bitWidth());
 
+            DPRINTF(SumcheckCausalTraffic,
+                    "NI %d received a flit, tick %d",
+                    m_id, curTick());
+            DPRINTF(SumcheckCausalTraffic,
+                    "NI %d: src=%p, worker=%p, flit type=%d\n",
+                    m_id, sumcheckTesterSrc, sumcheckTesterWorker,
+                    t_flit->get_type());
+
             int vnet = t_flit->get_vnet();
             t_flit->set_dequeue_time(curTick());
 
@@ -245,6 +258,20 @@ NetworkInterface::wakeup()
                     // Space is available. Enqueue to protocol buffer.
                     outNode_ptr[vnet]->enqueue(t_flit->get_msg_ptr(), curTime,
                                                cyclesToTicks(Cycles(1)));
+
+                    // Notify SumcheckCausalTraffic if set
+                    if (sumcheckTesterSrc != nullptr) {
+                        RequestMsg *req_msg = static_cast<RequestMsg *>(
+                            t_flit->get_msg_ptr().get());
+                        sumcheckTesterSrc->notifyArrivalByAddr(
+                            req_msg->m_addr);
+                    }
+                    if (sumcheckTesterWorker != nullptr) {
+                        RequestMsg *req_msg = static_cast<RequestMsg *>(
+                            t_flit->get_msg_ptr().get());
+                        sumcheckTesterWorker->notifyArrivalByAddr(
+                            req_msg->m_addr);
+                    }
 
                     // Simply send a credit back since we are not buffering
                     // this flit in the NI
@@ -333,6 +360,23 @@ NetworkInterface::checkStallQueue()
                     curTime)) {
                     outNode_ptr[vnet]->enqueue(stallFlit->get_msg_ptr(),
                         curTime, cyclesToTicks(Cycles(1)));
+
+                    // Notify SumcheckCausalTraffic if set
+
+                    // It is guaranteed that the stall queue
+                    // only contains TAIL_/HEAD_TAIL_ flits
+                    if (sumcheckTesterSrc != nullptr) {
+                        RequestMsg *req_msg = static_cast<RequestMsg *>(
+                            stallFlit->get_msg_ptr().get());
+                        sumcheckTesterSrc->notifyArrivalByAddr(
+                            req_msg->m_addr);
+                    }
+                    if (sumcheckTesterWorker != nullptr) {
+                        RequestMsg *req_msg = static_cast<RequestMsg *>(
+                            stallFlit->get_msg_ptr().get());
+                        sumcheckTesterWorker->notifyArrivalByAddr(
+                            req_msg->m_addr);
+                    }
 
                     // Send back a credit with free signal now that the
                     // VC is no longer stalled.

@@ -31,6 +31,8 @@
 #ifndef __MEM_RUBY_NETWORK_GARNET_0_COMMONTYPES_HH__
 #define __MEM_RUBY_NETWORK_GARNET_0_COMMONTYPES_HH__
 
+#include <cstdint>
+
 #include "mem/ruby/common/NetDest.hh"
 
 namespace gem5
@@ -48,10 +50,30 @@ enum flit_type {HEAD_, BODY_, TAIL_, HEAD_TAIL_,
                 CREDIT_, NUM_FLIT_TYPE_};
 enum VC_state_type {IDLE_, VC_AB_, ACTIVE_, NUM_VC_STATE_TYPE_};
 enum VNET_type {CTRL_VNET_, DATA_VNET_, NULL_VNET_, NUM_VNET_TYPE_};
-enum flit_stage {I_, VA_, SA_, ST_, LT_, NUM_FLIT_STAGE_};
-enum link_type { EXT_IN_, EXT_OUT_, INT_, NUM_LINK_TYPES_ };
-enum RoutingAlgorithm { TABLE_ = 0, XY_ = 1, CUSTOM_ = 2,
-                        NUM_ROUTING_ALGORITHM_};
+enum flit_stage
+{
+    I_, VA_, SA_, ST_, LT_, NUM_FLIT_STAGE_};
+enum link_type
+{
+    EXT_IN_, EXT_OUT_, INT_, NUM_LINK_TYPES_ };
+enum RoutingAlgorithm
+{
+    TABLE_ = 0, XY_ = 1, CUSTOM_ = 2,
+                       NUM_ROUTING_ALGORITHM_};
+enum sumcheck_msg_type
+{
+    VECTOR_ELEMENT_, CHALLENGE_,
+                        RESPONSE_ELEMENT_, RESPONSE_AGGREGATE_,
+                        NUM_SUMCHECK_MSG_TYPES_ };
+enum sumcheck_node_type
+{
+    SOURCE_, WORKER_, NEITHER_,
+                         NUM_SUMCHECK_NODE_TYPES_ };
+enum sumcheck_source_state
+{
+    SEND_CHALLENGE_, SEND_VECTOR_,
+                            WAIT_RESPONSE_, AGGREGATE_,
+                            NUM_SUMCHECK_SOURCE_STATE_ };
 
 struct RouteInfo
 {

@@ -49,6 +49,8 @@
 namespace gem5
 {
 
+class SumcheckCausalTraffic;
+
 namespace ruby
 {
 
@@ -83,6 +85,15 @@ class NetworkInterface : public ClockedObject, public Consumer
     uint32_t functionalWrite(Packet *);
 
     void scheduleFlit(flit *t_flit);
+
+    void setSumcheckTesterSrc(SumcheckCausalTraffic *tester)
+    {
+        sumcheckTesterSrc = tester;
+    }
+    void setSumcheckTesterWorker(SumcheckCausalTraffic *tester)
+    {
+        sumcheckTesterWorker = tester;
+    }
 
     int get_router_id(int vnet)
     {
@@ -292,6 +303,9 @@ class NetworkInterface : public ClockedObject, public Consumer
     std::vector<MessageBuffer *> outNode_ptr;
     // When a vc stays busy for a long time, it indicates a deadlock
     std::vector<int> vc_busy_counter;
+
+    SumcheckCausalTraffic *sumcheckTesterSrc = nullptr;
+    SumcheckCausalTraffic *sumcheckTesterWorker = nullptr;
 
     void checkStallQueue();
     bool flitisizeMessage(MsgPtr msg_ptr, int vnet);
