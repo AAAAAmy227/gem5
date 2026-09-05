@@ -187,6 +187,34 @@ Router::getPortDirectionName(PortDirection direction)
     return direction;
 }
 
+int
+Router::getVnetCredits(int outport, int vnet)
+{
+    OutputUnit *ou = getOutputUnit(outport);
+    int vc_per_vnet = ou->getVcsPerVnet();
+    int start_vc = vnet * vc_per_vnet;
+    int end_vc = start_vc + vc_per_vnet;
+    int total = 0;
+    for (int vc = start_vc; vc < end_vc; vc++) {
+        total += ou->get_credit_count(vc);
+    }
+    return total;
+}
+
+int
+Router::getVnetMaxCredits(int outport, int vnet)
+{
+    OutputUnit *ou = getOutputUnit(outport);
+    int vc_per_vnet = ou->getVcsPerVnet();
+    int start_vc = vnet * vc_per_vnet;
+    int end_vc = start_vc + vc_per_vnet;
+    int total = 0;
+    for (int vc = start_vc; vc < end_vc; vc++) {
+        total += ou->get_max_credit_count(vc);
+    }
+    return total;
+}
+
 void
 Router::regStats()
 {

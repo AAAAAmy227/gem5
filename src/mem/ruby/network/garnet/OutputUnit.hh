@@ -77,6 +77,11 @@ class OutputUnit : public Consumer
     {
         return outVcState[vc].get_credit_count();
     }
+    int
+    get_max_credit_count(int vc)
+    {
+        return outVcState[vc].get_max_credit_count();
+    }
 
     inline int
     get_outlink_id()
