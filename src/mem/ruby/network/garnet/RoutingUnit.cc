@@ -30,6 +30,16 @@
 
 #include "mem/ruby/network/garnet/RoutingUnit.hh"
 
+#if __has_include("mem/ruby/network/garnet/SumcheckAdaptive.hh")
+#include "mem/ruby/network/garnet/SumcheckAdaptive.hh"
+#define GEM5_HAS_SUMCHECK_ADAPTIVE 1
+#endif
+
+#include <string>
+#include <vector>
+
+#include "base/logging.hh"
+
 #include "base/cast.hh"
 #include "base/compiler.hh"
 #include "debug/RubyNetwork.hh"
@@ -49,6 +59,7 @@ namespace garnet
 RoutingUnit::RoutingUnit(Router *router)
 {
     m_router = router;
+    m_sumcheck_adaptive = nullptr;
     m_routing_table.clear();
     m_weight_table.clear();
 }
@@ -171,6 +182,15 @@ RoutingUnit::outportCompute(RouteInfo route, int inport,
 {
     int outport = -1;
 
+    RoutingAlgorithm routing_algorithm =
+        (RoutingAlgorithm) m_router->get_net_ptr()->getRoutingAlgorithm();
+    if (routing_algorithm == SUMCHECK_) {
+        fatal_if(route.vnet != 0, "Sumcheck only supports vnet 0");
+        return route.dest_router == m_router->get_id() ?
+            lookupRoutingTable(route.vnet, route.net_dest) :
+            outportComputeSumcheck(route);
+    }
+
     if (route.dest_router == m_router->get_id()) {
 
         // Multiple NIs may be connected to this router,
@@ -179,12 +199,8 @@ RoutingUnit::outportCompute(RouteInfo route, int inport,
         outport = lookupRoutingTable(route.vnet, route.net_dest);
         return outport;
     }
-
     // Routing Algorithm set in GarnetNetwork.py
     // Can be over-ridden from command line using --routing-algorithm = 1
-    RoutingAlgorithm routing_algorithm =
-        (RoutingAlgorithm) m_router->get_net_ptr()->getRoutingAlgorithm();
-
     switch (routing_algorithm) {
         case TABLE_:  outport =
             lookupRoutingTable(route.vnet, route.net_dest); break;
@@ -193,6 +209,7 @@ RoutingUnit::outportCompute(RouteInfo route, int inport,
         // any custom algorithm
         case CUSTOM_: outport =
             outportComputeCustom(route, inport, inport_dirn); break;
+        case SUMCHECK_: break; // handled above
         default: outport =
             lookupRoutingTable(route.vnet, route.net_dest); break;
     }
@@ -289,6 +306,155 @@ RoutingUnit::outportComputeCustom(RouteInfo route,
     return m_outports_dirn2idx[outport_dirn];
     
     panic("%s placeholder executed", __FUNCTION__);
+}
+
+namespace
+{
+constexpr int Workers = 64;
+constexpr int GatewayBase = 64;
+constexpr int Root = 68;
+constexpr int Width = 4;
+
+bool isWorker(int id) { return id >= 0 && id < Workers; }
+bool isGateway(int id) { return id >= GatewayBase && id < Root; }
+int clusterOfWorker(int id) { return id / 16; }
+int clusterOfGateway(int id) { return id - GatewayBase; }
+int gatewayOfWorker(int id) { return GatewayBase + clusterOfWorker(id); }
+
+std::pair<int, int>
+entryCoord(unsigned entries, unsigned index)
+{
+    static constexpr int coords[4][2] = {{0, 1}, {1, 3}, {2, 0}, {3, 2}};
+    if (entries == 1)
+        return {1, 1};
+    if (entries == 2)
+        return index == 0 ? std::pair<int, int>{0, 1} :
+                            std::pair<int, int>{3, 2};
+    return {coords[index][0], coords[index][1]};
+}
+
+int
+entryRouter(int cluster, unsigned entries, unsigned index)
+{
+    auto [row, col] = entryCoord(entries, index);
+    return cluster * 16 + row * Width + col;
+}
+
+unsigned
+nearestEntry(int worker, unsigned entries)
+{
+    const int local = worker % 16;
+    const int row = local / Width;
+    const int col = local % Width;
+    unsigned best = 0;
+    int best_distance = 9;
+    for (unsigned index = 0; index < entries; ++index) {
+        auto [entry_row, entry_col] = entryCoord(entries, index);
+        int distance = std::abs(row - entry_row) + std::abs(col - entry_col);
+        if (distance < best_distance) {
+            best = index;
+            best_distance = distance;
+        }
+    }
+    return best;
+}
+} // anonymous namespace
+
+int
+RoutingUnit::outportForDirection(const PortDirection &direction) const
+{
+    auto found = m_outports_dirn2idx.find(direction);
+    fatal_if(found == m_outports_dirn2idx.end(),
+             "Router %d lacks Sumcheck outport %s",
+             m_router->get_id(), direction.c_str());
+    return found->second;
+}
+
+bool
+RoutingUnit::legalSumcheckPair(int source, int destination,
+                               unsigned entries) const
+{
+    if (isWorker(source)) {
+        if (destination == gatewayOfWorker(source))
+            return true;
+        unsigned entry = nearestEntry(source, entries);
+        return destination != source && destination == entryRouter(
+            clusterOfWorker(source), entries, entry);
+    }
+    if (isGateway(source))
+        return destination == Root ||
+            (isWorker(destination) &&
+             clusterOfWorker(destination) == clusterOfGateway(source));
+    return source == Root && isGateway(destination);
+}
+
+int
+RoutingUnit::outportComputeSumcheck(RouteInfo route)
+{
+#ifndef GEM5_HAS_SUMCHECK_ADAPTIVE
+    fatal("SumcheckAdaptive.hh is required for Sumcheck routing");
+#else
+    const int current = m_router->get_id();
+    const int source = route.src_router;
+    const int destination = route.dest_router;
+    const unsigned entries =
+        m_router->get_net_ptr()->getEntriesPerCluster();
+    fatal_if(entries != 1 && entries != 2 && entries != 4,
+             "Invalid Sumcheck entry count %u", entries);
+    fatal_if(!legalSumcheckPair(source, destination, entries),
+             "Unsupported Sumcheck pair %d->%d", source, destination);
+
+    auto meshOutport = [&](int target) {
+        fatal_if(!isWorker(current) || !isWorker(target) ||
+                 clusterOfWorker(current) != clusterOfWorker(target),
+                 "Illegal Sumcheck mesh step %d->%d", current, target);
+        const int here = current % 16;
+        const int there = target % 16;
+        if (here / Width < there / Width)
+            return outportForDirection("Dim0Pos");
+        if (here / Width > there / Width)
+            return outportForDirection("Dim0Neg");
+        if (here % Width < there % Width)
+            return outportForDirection("Dim1Pos");
+        if (here % Width > there % Width)
+            return outportForDirection("Dim1Neg");
+        fatal("Mesh step requested at destination router %d", current);
+    };
+
+    if (isWorker(source)) {
+        fatal_if(!isWorker(current), "Illegal worker-origin route at %d", current);
+        const int target = destination == gatewayOfWorker(source) ?
+            entryRouter(clusterOfWorker(source), entries,
+                        nearestEntry(source, entries)) : destination;
+        return current == target ? outportForDirection("Gateway") :
+                                   meshOutport(target);
+    }
+    if (source == Root)
+        return outportForDirection(
+            "RootToG" + std::to_string(clusterOfGateway(destination)));
+    if (destination == Root)
+        return outportForDirection("RootUp");
+
+    if (current == source) {
+        std::vector<int> candidateOutports;
+        candidateOutports.reserve(entries);
+        for (unsigned index = 0; index < entries; ++index) {
+            int outport = outportForDirection("Entry" + std::to_string(index));
+            fatal_if(m_router->getOutportRouterId(outport) !=
+                     entryRouter(clusterOfGateway(source), entries, index),
+                     "Gateway %d Entry%u is wired to the wrong router",
+                     source, index);
+            candidateOutports.push_back(outport);
+        }
+        fatal_if(!m_sumcheck_adaptive,
+                 "Gateway %d has no SumcheckAdaptive selector", source);
+        AdaptiveEntryDecision decision = m_sumcheck_adaptive->chooseEntry(
+            route.vnet, route.dest_router, candidateOutports);
+        return decision.selectedOutport;
+    }
+    fatal_if(!isWorker(current), "Illegal gateway-origin route at %d", current);
+    return meshOutport(destination);
+#endif
 }
 
 } // namespace garnet

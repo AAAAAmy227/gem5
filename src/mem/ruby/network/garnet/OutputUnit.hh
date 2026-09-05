@@ -72,6 +72,7 @@ class OutputUnit : public Consumer
 
     inline PortDirection get_direction() { return m_direction; }
 
+    NetworkLink *getOutLink() const { return m_out_link; }
     int
     get_credit_count(int vc)
     {

@@ -46,6 +46,7 @@ namespace ruby
 namespace garnet
 {
 
+class SumcheckAdaptive;
 class InputUnit;
 class Router;
 
@@ -56,6 +57,11 @@ class RoutingUnit
     int outportCompute(RouteInfo route,
                       int inport,
                       PortDirection inport_dirn);
+
+    void setSumcheckAdaptive(SumcheckAdaptive *adaptive)
+    {
+        m_sumcheck_adaptive = adaptive;
+    }
 
     // Topology-agnostic Routing Table based routing (default)
     void addRoute(std::vector<NetDest>& routing_table_entry);
@@ -74,6 +80,11 @@ class RoutingUnit
                          PortDirection inport_dirn);
 
     // Custom Routing Algorithm using Port Directions
+    int outportComputeSumcheck(RouteInfo route);
+    int outportForDirection(const PortDirection &direction) const;
+    bool legalSumcheckPair(int source, int destination,
+                           unsigned entries) const;
+
     int outportComputeCustom(RouteInfo route,
                              int inport,
                              PortDirection inport_dirn);
@@ -95,6 +106,7 @@ class RoutingUnit
     std::map<int, PortDirection> m_inports_idx2dirn;
     std::map<int, PortDirection> m_outports_idx2dirn;
     std::map<PortDirection, int> m_outports_dirn2idx;
+    SumcheckAdaptive *m_sumcheck_adaptive;
 };
 
 } // namespace garnet

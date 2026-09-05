@@ -62,6 +62,7 @@ class NetworkLink;
 class CreditLink;
 class InputUnit;
 class OutputUnit;
+class SumcheckAdaptive;
 
 class Router : public BasicRouter, public Consumer
 {
@@ -103,6 +104,8 @@ class Router : public BasicRouter, public Consumer
         assert(port < m_input_unit.size());
         return m_input_unit[port].get();
     }
+    int getOutportRouterId(int outport);
+    void setSumcheckAdaptive(SumcheckAdaptive *adaptive);
 
     OutputUnit*
     getOutputUnit(unsigned port)

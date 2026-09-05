@@ -146,6 +146,21 @@ Router::addOutPort(PortDirection outport_dirn,
     routingUnit.addOutDirection(outport_dirn, port_num);
 }
 
+int
+Router::getOutportRouterId(int outport)
+{
+    assert(outport >= 0 && outport < m_output_unit.size());
+    auto *consumer = m_output_unit[outport]->getOutLink()->getLinkConsumer();
+    auto *router = dynamic_cast<Router *>(consumer);
+    return router ? router->get_id() : -1;
+}
+
+void
+Router::setSumcheckAdaptive(SumcheckAdaptive *adaptive)
+{
+    routingUnit.setSumcheckAdaptive(adaptive);
+}
+
 PortDirection
 Router::getOutportDirection(int outport)
 {
