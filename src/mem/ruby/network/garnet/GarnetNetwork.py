@@ -68,6 +68,12 @@ class GarnetNetworkInterface(ClockedObject):
     garnet_deadlock_threshold = Param.UInt32(
         Parent.garnet_deadlock_threshold, "network-level deadlock threshold"
     )
+    sumcheck_tester_src = Param.SumcheckCausalTraffic(
+        NULL, "SumcheckCausalTraffic SOURCE for notifyArrival callback"
+    )
+    sumcheck_tester_worker = Param.SumcheckCausalTraffic(
+        NULL, "SumcheckCausalTraffic WORKER for notifyArrival callback"
+    )
 
 
 class GarnetRouter(BasicRouter):

@@ -88,6 +88,20 @@ def define_options(parser):
             inside garnet network.""",
     )
     parser.add_argument(
+        "--buffers-per-data-vc",
+        action="store",
+        type=int,
+        default=4,
+        help="buffers per data virtual channel",
+    )
+    parser.add_argument(
+        "--buffers-per-ctrl-vc",
+        action="store",
+        type=int,
+        default=1,
+        help="buffers per ctrl virtual channel",
+    )
+    parser.add_argument(
         "--routing-algorithm",
         action="store",
         type=int,

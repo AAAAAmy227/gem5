@@ -1,0 +1,10 @@
+# -*- mode:python -*-
+
+Import('*')
+
+if env['CONF']['PROTOCOL'] == 'None':
+    Return()
+
+SimObject('SumcheckCausalTraffic.py', sim_objects=['SumcheckCausalTraffic'])
+Source('SumcheckCausalTraffic.cc')
+DebugFlag('SumcheckCausalTraffic')
