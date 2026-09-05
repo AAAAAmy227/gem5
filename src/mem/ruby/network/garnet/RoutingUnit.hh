@@ -40,6 +40,8 @@
 namespace gem5
 {
 
+struct GarnetRouterParams;
+
 namespace ruby
 {
 
@@ -54,6 +56,7 @@ class RoutingUnit
 {
   public:
     RoutingUnit(Router *router);
+    RoutingUnit(Router *router, const GarnetRouterParams &p);
     int outportCompute(RouteInfo route,
                       int inport,
                       PortDirection inport_dirn);
@@ -82,8 +85,6 @@ class RoutingUnit
     // Custom Routing Algorithm using Port Directions
     int outportComputeSumcheck(RouteInfo route);
     int outportForDirection(const PortDirection &direction) const;
-    bool legalSumcheckPair(int source, int destination,
-                           unsigned entries) const;
 
     int outportComputeCustom(RouteInfo route,
                              int inport,

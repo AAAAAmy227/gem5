@@ -374,7 +374,7 @@ SumcheckCausalTraffic::createSumcheckPacket(int destId, int msgType,
         paddr, access_size, Request::Flags(), requestorId);
 
     req->setContext(nodeId);
-    PacketPtr pkt = new Packet(req, MemCmd::WriteReq);
+    PacketPtr pkt = new Packet(req, MemCmd::ReadReq);
     pkt->dataDynamic(new uint8_t[req->getSize()]);
     pkt->senderState = nullptr;
     return pkt;

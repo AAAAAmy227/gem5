@@ -126,9 +126,20 @@ def define_options(parser):
 
 
 def setup_memory_controllers(system, ruby, dir_cntrls, options):
+    dir_bits = (
+        options.interleaving_bits
+        if options.interleaving_bits > 0
+        else math.ceil(math.log2(options.num_dirs))
+    )
+
+    if options.num_dirs > (1 << dir_bits):
+        m5.fatal(
+            f"{dir_bits} interleaving bits cannot represent "
+            f"{options.num_dirs} directories"
+        )
     if options.numa_high_bit:
         block_size_bits = (
-            options.numa_high_bit + 1 - int(math.log(options.num_dirs, 2))
+            options.numa_high_bit + 1 - dir_bits
         )
         ruby.block_size_bytes = 2 ** (block_size_bits)
     else:
@@ -141,7 +152,7 @@ def setup_memory_controllers(system, ruby, dir_cntrls, options):
     crossbars = []
 
     if options.numa_high_bit:
-        dir_bits = int(math.log(options.num_dirs, 2))
+        # dir_bits = dir_bits
         intlv_size = 2 ** (options.numa_high_bit - dir_bits + 1)
     else:
         # if the numa_bit is not specified, set the directory bits as the
@@ -166,7 +177,7 @@ def setup_memory_controllers(system, ruby, dir_cntrls, options):
                 mem_type,
                 r,
                 index,
-                int(math.log(options.num_dirs, 2)),
+                dir_bits,
                 intlv_size,
                 options.xor_low_bit,
             )

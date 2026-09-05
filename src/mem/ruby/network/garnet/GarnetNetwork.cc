@@ -70,6 +70,7 @@ GarnetNetwork::GarnetNetwork(const Params &p)
     m_buffers_per_data_vc = p.buffers_per_data_vc;
     m_buffers_per_ctrl_vc = p.buffers_per_ctrl_vc;
     m_routing_algorithm = p.routing_algorithm;
+    m_entries_per_cluster = p.entries_per_cluster;
     m_next_packet_id = 0;
 
     m_enable_fault_model = p.enable_fault_model;
@@ -122,16 +123,18 @@ GarnetNetwork::init()
     m_topology_ptr->createLinks(this);
 
     // Initialize topology specific parameters
-    if (getNumRows() > 0) {
-        // Only for Mesh topology
-        // m_num_rows and m_num_cols are only used for
-        // implementing XY or custom routing in RoutingUnit.cc
-        m_num_rows = getNumRows();
-        m_num_cols = m_routers.size() / m_num_rows;
-        assert(m_num_rows * m_num_cols == m_routers.size());
-    } else {
-        m_num_rows = -1;
-        m_num_cols = -1;
+    if (m_routing_algorithm != SUMCHECK_) {
+        if (getNumRows() > 0) {
+            // Only for Mesh topology
+            // m_num_rows and m_num_cols are only used for
+            // implementing XY or custom routing in RoutingUnit.cc
+            m_num_rows = getNumRows();
+            m_num_cols = m_routers.size() / m_num_rows;
+            assert(m_num_rows * m_num_cols == m_routers.size());
+        } else {
+            m_num_rows = -1;
+            m_num_cols = -1;
+        }
     }
 
     // FaultModel: declare each router to the fault model

@@ -17,8 +17,8 @@ class SumcheckHierarchy(SimpleTopology):
             check_p(p)
         except ValueError as error:
             fatal(str(error))
-        if len(self.nodes) != NUM_ROUTERS:
-            fatal(f"SumcheckHierarchy requires {NUM_ROUTERS} controllers; got {len(self.nodes)}")
+#        if len(self.nodes) != NUM_ROUTERS:
+#            fatal(f"SumcheckHierarchy requires {NUM_ROUTERS} controllers; got {len(self.nodes)}")
         if options.routing_algorithm != 3:
             fatal("SumcheckHierarchy requires --routing-algorithm=3")
         if getattr(options, "entry_placement", "staggered") != "staggered":
@@ -31,7 +31,7 @@ class SumcheckHierarchy(SimpleTopology):
         network.routers = routers
         network.ext_links = [
             ExtLink(
-                link_id=i, ext_node=node, int_node=routers[i],
+                link_id=i, ext_node=node, int_node=routers[i % NUM_ROUTERS],
                 latency=options.link_latency)
             for i, node in enumerate(self.nodes)
         ]

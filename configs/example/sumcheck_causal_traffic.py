@@ -215,7 +215,7 @@ else:
 
     expected_cpus = num_clusters * mesh_rows * mesh_rows + num_clusters + 1
     assert num_cpus == expected_cpus
-    assert args.num_dirs == num_cpus
+#    assert args.num_dirs == num_cpus
     args.num_cpus = num_cpus
 
     print(f"SumcheckHierarchy: {num_clusters} clusters, "

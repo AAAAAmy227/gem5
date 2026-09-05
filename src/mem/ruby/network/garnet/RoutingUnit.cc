@@ -47,6 +47,8 @@
 #include "mem/ruby/network/garnet/Router.hh"
 #include "mem/ruby/slicc_interface/Message.hh"
 
+#include "cpu/testers/sumcheck_causal_traffic/SumcheckCausalTraffic.hh"
+
 namespace gem5
 {
 
@@ -60,6 +62,24 @@ RoutingUnit::RoutingUnit(Router *router)
 {
     m_router = router;
     m_sumcheck_adaptive = nullptr;
+    m_routing_table.clear();
+    m_weight_table.clear();
+}
+
+RoutingUnit::RoutingUnit(Router *router, const GarnetRouterParams &p)
+{
+    m_router = router;
+    if (p.topology == "SumcheckHierarchy") {
+        m_sumcheck_adaptive = new SumcheckAdaptive(router,
+        this,
+        p.entries_per_cluster,
+        p.mesh_rows,
+        p.entry_congestion_weight,
+        p.sumcheck_routing=="fixed"?MIN_SCORE_:RANDOM_SCORE_,
+        p.sumcheck_seed);
+    } else {
+        m_sumcheck_adaptive = nullptr;
+    }
     m_routing_table.clear();
     m_weight_table.clear();
 }
@@ -319,7 +339,6 @@ bool isWorker(int id) { return id >= 0 && id < Workers; }
 bool isGateway(int id) { return id >= GatewayBase && id < Root; }
 int clusterOfWorker(int id) { return id / 16; }
 int clusterOfGateway(int id) { return id - GatewayBase; }
-int gatewayOfWorker(int id) { return GatewayBase + clusterOfWorker(id); }
 
 std::pair<int, int>
 entryCoord(unsigned entries, unsigned index)
@@ -370,24 +389,6 @@ RoutingUnit::outportForDirection(const PortDirection &direction) const
     return found->second;
 }
 
-bool
-RoutingUnit::legalSumcheckPair(int source, int destination,
-                               unsigned entries) const
-{
-    if (isWorker(source)) {
-        if (destination == gatewayOfWorker(source))
-            return true;
-        unsigned entry = nearestEntry(source, entries);
-        return destination != source && destination == entryRouter(
-            clusterOfWorker(source), entries, entry);
-    }
-    if (isGateway(source))
-        return destination == Root ||
-            (isWorker(destination) &&
-             clusterOfWorker(destination) == clusterOfGateway(source));
-    return source == Root && isGateway(destination);
-}
-
 int
 RoutingUnit::outportComputeSumcheck(RouteInfo route)
 {
@@ -401,8 +402,17 @@ RoutingUnit::outportComputeSumcheck(RouteInfo route)
         m_router->get_net_ptr()->getEntriesPerCluster();
     fatal_if(entries != 1 && entries != 2 && entries != 4,
              "Invalid Sumcheck entry count %u", entries);
-    fatal_if(!legalSumcheckPair(source, destination, entries),
-             "Unsupported Sumcheck pair %d->%d", source, destination);
+
+    // Only classify a packet when it is injected. At later hops, routing is
+    // determined by the current router's role in the hierarchy.
+    if (source == current) {
+        const bool rootToWorker =
+            source == Root && isWorker(destination);
+        const bool workerToRoot =
+            isWorker(source) && destination == Root;
+        fatal_if(!rootToWorker && !workerToRoot,
+                 "Unsupported Sumcheck flow %d->%d", source, destination);
+    }
 
     auto meshOutport = [&](int target) {
         fatal_if(!isWorker(current) || !isWorker(target) ||
@@ -421,39 +431,46 @@ RoutingUnit::outportComputeSumcheck(RouteInfo route)
         fatal("Mesh step requested at destination router %d", current);
     };
 
-    if (isWorker(source)) {
-        fatal_if(!isWorker(current), "Illegal worker-origin route at %d", current);
-        const int target = destination == gatewayOfWorker(source) ?
-            entryRouter(clusterOfWorker(source), entries,
-                        nearestEntry(source, entries)) : destination;
+    if (isWorker(current)) {
+        if (destination != Root)
+            return meshOutport(destination);
+
+        const int target = entryRouter(
+            clusterOfWorker(source), entries, nearestEntry(source, entries));
         return current == target ? outportForDirection("Gateway") :
                                    meshOutport(target);
     }
-    if (source == Root)
-        return outportForDirection(
-            "RootToG" + std::to_string(clusterOfGateway(destination)));
-    if (destination == Root)
-        return outportForDirection("RootUp");
 
-    if (current == source) {
+    if (current == Root)
+        return outportForDirection(
+            "RootToG" + std::to_string(clusterOfWorker(destination)));
+
+    if (isGateway(current)) {
+        if (destination == Root)
+            return outportForDirection("RootUp");
+
+        fatal_if(!isWorker(destination) ||
+                 clusterOfWorker(destination) != clusterOfGateway(current),
+                 "Illegal Sumcheck gateway step %d->%d", current,
+                 destination);
         std::vector<int> candidateOutports;
         candidateOutports.reserve(entries);
         for (unsigned index = 0; index < entries; ++index) {
             int outport = outportForDirection("Entry" + std::to_string(index));
             fatal_if(m_router->getOutportRouterId(outport) !=
-                     entryRouter(clusterOfGateway(source), entries, index),
+                     entryRouter(clusterOfGateway(current), entries, index),
                      "Gateway %d Entry%u is wired to the wrong router",
-                     source, index);
+                     current, index);
             candidateOutports.push_back(outport);
         }
         fatal_if(!m_sumcheck_adaptive,
-                 "Gateway %d has no SumcheckAdaptive selector", source);
+                 "Gateway %d has no SumcheckAdaptive selector", current);
         AdaptiveEntryDecision decision = m_sumcheck_adaptive->chooseEntry(
             route.vnet, route.dest_router, candidateOutports);
-        return decision.selectedOutport;
+        return candidateOutports[decision.selected];
     }
-    fatal_if(!isWorker(current), "Illegal gateway-origin route at %d", current);
-    return meshOutport(destination);
+
+    fatal("Illegal Sumcheck current router %d", current);
 #endif
 }
 

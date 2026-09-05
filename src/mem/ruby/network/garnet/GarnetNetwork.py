@@ -46,6 +46,16 @@ class GarnetNetwork(RubyNetwork):
     buffers_per_data_vc = Param.UInt32(4, "buffers per data virtual channel")
     buffers_per_ctrl_vc = Param.UInt32(1, "buffers per ctrl virtual channel")
     routing_algorithm = Param.Int(0, "0: Weight-based Table, 1: XY, 2: Custom")
+    entries_per_cluster = Param.UInt32(
+        4, "Sumcheck gateway entry routers per cluster"
+    )
+    entry_congestion_weight = Param.Float(
+        0.0, "Congestion weight for Sumcheck entry selection"
+    )
+    sumcheck_routing = Param.String(
+        "fixed", "Sumcheck entry selection policy: fixed or adaptive"
+    )
+    sumcheck_seed = Param.UInt32(42, "Sumcheck entry-selection RNG seed")
     enable_fault_model = Param.Bool(False, "enable network fault model")
     fault_model = Param.FaultModel(NULL, "network fault model")
     garnet_deadlock_threshold = Param.UInt32(
@@ -89,3 +99,15 @@ class GarnetRouter(BasicRouter):
     width = Param.UInt32(
         Parent.ni_flit_size, "bit width supported by the router"
     )
+    topology = Param.String(Parent.topology, "network topology name")
+    entries_per_cluster = Param.UInt32(
+        Parent.entries_per_cluster, "Sumcheck entries per cluster"
+    )
+    mesh_rows = Param.Int(Parent.num_rows, "rows in each Sumcheck worker mesh")
+    entry_congestion_weight = Param.Float(
+        Parent.entry_congestion_weight, "Sumcheck congestion weight"
+    )
+    sumcheck_routing = Param.String(
+        Parent.sumcheck_routing, "Sumcheck entry selection policy"
+    )
+    sumcheck_seed = Param.UInt32(Parent.sumcheck_seed, "Sumcheck RNG seed")
