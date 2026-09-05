@@ -74,6 +74,10 @@ enum sumcheck_source_state
     SEND_CHALLENGE_, SEND_VECTOR_,
                             WAIT_RESPONSE_, AGGREGATE_,
                             NUM_SUMCHECK_SOURCE_STATE_ };
+enum SumcheckRoutingMode
+{
+    MIN_SCORE_, RANDOM_SCORE_,
+                        NUM_SUMCHECK_ROUTING_MODE_ };
 
 struct RouteInfo
 {
