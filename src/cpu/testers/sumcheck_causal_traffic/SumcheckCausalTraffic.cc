@@ -254,6 +254,9 @@ SumcheckCausalTraffic::laneForWorkerIndex(int index) const
 int
 SumcheckCausalTraffic::workerAtSchedulePosition(int position) const
 {
+    // Transpose cluster-major worker numbering so consecutive sends rotate
+    // across clusters. For four 16-worker clusters this is
+    // 0,16,32,48; 1,17,33,49; ... .
     const int cluster = position % numClusters;
     const int localWorker = position / numClusters;
     return cluster * workersPerCluster + localWorker;

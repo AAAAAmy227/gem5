@@ -34,7 +34,9 @@ class SumcheckHierarchy(SimpleTopology):
         ]
         network.routers = routers
         root_lanes = options.root_ni_lanes
-        root_directory_ids = set(model.root_directory_ids(root_lanes))
+        root_ejection_directory_ids = set(
+            model.root_ejection_directory_ids(root_lanes)
+        )
         expected_l1_controllers = model.num_workers + root_lanes
         if options.num_cpus != expected_l1_controllers:
             fatal(
@@ -55,9 +57,9 @@ class SumcheckHierarchy(SimpleTopology):
                 directory_id = index - options.num_cpus
                 if directory_id < model.root:
                     router_id = directory_id
-                elif directory_id in root_directory_ids:
-                    # Worker responses select one of these directory IDs by
-                    # source cluster. All of them eject at the root router.
+                elif directory_id in root_ejection_directory_ids:
+                    # These are response/ejection endpoints, one per root NI
+                    # lane. They do not represent replicated logical storage.
                     router_id = model.root
                 else:
                     # Padding directories required by power-of-two address

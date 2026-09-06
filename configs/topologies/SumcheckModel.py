@@ -72,12 +72,13 @@ class HierarchyModel:
     def lane_for_worker(self, worker, lanes):
         return self.lane_for_cluster(self.worker_cluster(worker), lanes)
 
-    def root_directory_ids(self, lanes):
+    def root_ejection_directory_ids(self, lanes):
+        """Directory endpoints modeling the root's response/ejection lanes."""
         self.check_root_ni_lanes(lanes)
         return tuple(self.root + lane for lane in range(lanes))
 
     def required_directory_count(self, lanes):
-        required = self.root_directory_ids(lanes)[-1] + 1
+        required = self.root_ejection_directory_ids(lanes)[-1] + 1
         return 1 << (required - 1).bit_length()
 
     def entry_coordinates(self, entries):

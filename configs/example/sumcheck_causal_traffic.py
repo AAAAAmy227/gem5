@@ -169,10 +169,12 @@ if args.topology == "MeshSumcheck":
         )
     args.root_ni_lanes = root_ni_lanes
 
-    root_directory_ids = tuple(
+    # Garnet standalone requests inject through L1 NIs and eject through
+    # directory NIs. Give every root lane a matching response/ejection endpoint.
+    root_ejection_directory_ids = tuple(
         num_routers + lane for lane in range(root_ni_lanes)
     )
-    required_dirs = root_directory_ids[-1] + 1
+    required_dirs = root_ejection_directory_ids[-1] + 1
     min_num_dirs = 1 << (required_dirs - 1).bit_length()
     if args.num_dirs < min_num_dirs:
         args.num_dirs = min_num_dirs
@@ -206,7 +208,7 @@ if args.topology == "MeshSumcheck":
     destination_bits = (args.num_dirs - 1).bit_length()
 
     for worker in range(num_workers):
-        source_directory_id = root_directory_ids[
+        source_directory_id = root_ejection_directory_ids[
             (worker // workers_per_cluster) % root_ni_lanes
         ]
         cpus.append(SumcheckCausalTraffic(
@@ -233,7 +235,7 @@ if args.topology == "MeshSumcheck":
         worker_index=-1,
         workers_per_cluster=workers_per_cluster,
         destination_bits=destination_bits,
-        source_id=root_directory_ids[0],
+        source_id=root_ejection_directory_ids[0],
         num_workers=num_workers,
         worker_ids=worker_router_ids,
         num_sumcheck_rounds=args.num_sumcheck_rounds,
@@ -295,11 +297,13 @@ else:
     print(f"Total L1 controllers: {num_cpu_controllers}")
 
     worker_router_ids = list(range(num_workers))
-    root_directory_ids = model.root_directory_ids(root_ni_lanes)
+    root_ejection_directory_ids = model.root_ejection_directory_ids(
+        root_ni_lanes
+    )
     destination_bits = (args.num_dirs - 1).bit_length()
 
     for i in range(num_workers):
-        source_directory_id = root_directory_ids[
+        source_directory_id = root_ejection_directory_ids[
             model.lane_for_worker(i, root_ni_lanes)
         ]
         cpus.append(SumcheckCausalTraffic(
@@ -326,7 +330,7 @@ else:
         worker_index=-1,
         workers_per_cluster=model.workers_per_cluster,
         destination_bits=destination_bits,
-        source_id=root_directory_ids[0],
+        source_id=root_ejection_directory_ids[0],
         num_workers=num_workers,
         worker_ids=worker_router_ids,
         num_sumcheck_rounds=args.num_sumcheck_rounds,
@@ -378,7 +382,7 @@ for worker in range(num_workers):
     system.ruby.network.netifs[
         directory_ni_base + worker
     ].sumcheck_tester_worker = cpus[worker]
-for directory_id in root_directory_ids:
+for directory_id in root_ejection_directory_ids:
     system.ruby.network.netifs[
         directory_ni_base + directory_id
     ].sumcheck_tester_src = source_tester
