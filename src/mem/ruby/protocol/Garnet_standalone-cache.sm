@@ -141,37 +141,46 @@ machine(MachineType:L1Cache, "Garnet_standalone L1 Cache")
   // map_Address_to_Directory is used to retrieve it.
 
   action(a_issueRequest, "a", desc="Issue a request") {
-    enqueue(requestNetwork_out, RequestMsg, issue_latency) {
-      out_msg.addr := address;
-      out_msg.Type := CoherenceRequestType:MSG;
-      out_msg.Requestor := machineID;
-      out_msg.Destination.add(mapAddressToMachine(address, MachineType:Directory));
+    peek(mandatoryQueue_in, RubyRequest) {
+      enqueue(requestNetwork_out, RequestMsg, issue_latency) {
+        out_msg.addr := address;
+        out_msg.Type := CoherenceRequestType:MSG;
+        out_msg.Requestor := machineID;
+        out_msg.Destination.add(mapAddressToMachine(address, MachineType:Directory));
 
-      // To send broadcasts in vnet0 (to emulate broadcast-based protocols),
-      // replace the above line by the following:
-      // out_msg.Destination := broadcast(MachineType:Directory);
+        // To send broadcasts in vnet0 (to emulate broadcast-based protocols),
+        // replace the above line by the following:
+        // out_msg.Destination := broadcast(MachineType:Directory);
 
-      out_msg.MessageSize := MessageSizeType:Control;
+        out_msg.MessageSize := MessageSizeType:Control;
+        out_msg.PacketSize := in_msg.Size;
+      }
     }
   }
 
   action(b_issueForward, "b", desc="Issue a forward") {
-    enqueue(forwardNetwork_out, RequestMsg, issue_latency) {
-      out_msg.addr := address;
-      out_msg.Type := CoherenceRequestType:MSG;
-      out_msg.Requestor := machineID;
-      out_msg.Destination.add(mapAddressToMachine(address, MachineType:Directory));
-      out_msg.MessageSize := MessageSizeType:Control;
+    peek(mandatoryQueue_in, RubyRequest) {
+      enqueue(forwardNetwork_out, RequestMsg, issue_latency) {
+        out_msg.addr := address;
+        out_msg.Type := CoherenceRequestType:MSG;
+        out_msg.Requestor := machineID;
+        out_msg.Destination.add(mapAddressToMachine(address, MachineType:Directory));
+        out_msg.MessageSize := MessageSizeType:Control;
+        out_msg.PacketSize := in_msg.Size;
+      }
     }
   }
 
   action(c_issueResponse, "c", desc="Issue a response") {
-    enqueue(responseNetwork_out, RequestMsg, issue_latency) {
-      out_msg.addr := address;
-      out_msg.Type := CoherenceRequestType:MSG;
-      out_msg.Requestor := machineID;
-      out_msg.Destination.add(mapAddressToMachine(address, MachineType:Directory));
-      out_msg.MessageSize := MessageSizeType:Data;
+    peek(mandatoryQueue_in, RubyRequest) {
+      enqueue(responseNetwork_out, RequestMsg, issue_latency) {
+        out_msg.addr := address;
+        out_msg.Type := CoherenceRequestType:MSG;
+        out_msg.Requestor := machineID;
+        out_msg.Destination.add(mapAddressToMachine(address, MachineType:Directory));
+        out_msg.MessageSize := MessageSizeType:Data;
+        out_msg.PacketSize := in_msg.Size;
+      }
     }
   }
 

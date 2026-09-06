@@ -49,6 +49,7 @@ class GarnetNetwork(RubyNetwork):
     entries_per_cluster = Param.UInt32(
         4, "Sumcheck gateway entry routers per cluster"
     )
+    num_clusters = Param.UInt32(4, "number of Sumcheck worker clusters")
     entry_congestion_weight = Param.Float(
         0.0, "Congestion weight for Sumcheck entry selection"
     )
@@ -102,6 +103,9 @@ class GarnetRouter(BasicRouter):
     topology = Param.String(Parent.topology, "network topology name")
     entries_per_cluster = Param.UInt32(
         Parent.entries_per_cluster, "Sumcheck entries per cluster"
+    )
+    num_clusters = Param.UInt32(
+        Parent.num_clusters, "number of Sumcheck worker clusters"
     )
     mesh_rows = Param.Int(Parent.num_rows, "rows in each Sumcheck worker mesh")
     entry_congestion_weight = Param.Float(

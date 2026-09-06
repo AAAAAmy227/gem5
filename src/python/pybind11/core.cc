@@ -139,9 +139,9 @@ init_range(py::module_ &m_native)
     py::class_<AddrRange>(m, "AddrRange")
         .def(py::init<>())
         .def(py::init<Addr &, Addr &>())
-        .def(py::init<Addr, Addr, const std::vector<Addr> &, uint8_t>())
+        .def(py::init<Addr, Addr, const std::vector<Addr> &, Addr>())
         .def(py::init<const std::vector<AddrRange> &>())
-        .def(py::init<Addr, Addr, uint8_t, uint8_t, uint8_t, uint8_t>())
+        .def(py::init<Addr, Addr, uint8_t, uint8_t, uint8_t, Addr>())
 
         .def("__str__", &AddrRange::to_string)
 

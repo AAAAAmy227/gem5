@@ -923,6 +923,19 @@ TEST(AddrRangeTest, InterleavingNotEqualTo)
     EXPECT_FALSE(r1 == r2);
 }
 
+TEST(AddrRangeTest, InterleaveMatchWiderThanEightBits)
+{
+    std::vector<Addr> masks;
+    for (int bit = 0; bit < 9; ++bit) {
+        masks.push_back(1ULL << bit);
+    }
+
+    AddrRange range(0, 1024, masks, 256);
+
+    EXPECT_TRUE(range.contains(256));
+    EXPECT_FALSE(range.contains(0));
+}
+
 /*
  * The AddrRange(AddrRangeList) constructor "merges" the interleaving
  * address ranges. It should be noted that this constructor simply checks that

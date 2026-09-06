@@ -182,12 +182,16 @@ def init_network(options, network, InterfaceClass):
         network.vcs_per_vnet = options.vcs_per_vnet
         network.ni_flit_size = options.link_width_bits / 8
         network.routing_algorithm = options.routing_algorithm
-        network.entries_per_cluster = getattr(options, "entries_per_cluster", 4)
-        network.entry_congestion_weight = getattr(
-            options, "entry_congestion_weight", 0.0
-        )
-        network.sumcheck_routing = getattr(options, "sumcheck_routing", "fixed")
-        network.sumcheck_seed = getattr(options, "sumcheck_seed", 42)
+        if hasattr(options, "entries_per_cluster"):
+            network.entries_per_cluster = options.entries_per_cluster
+        if hasattr(options, "num_clusters"):
+            network.num_clusters = options.num_clusters
+        if hasattr(options, "entry_congestion_weight"):
+            network.entry_congestion_weight = options.entry_congestion_weight
+        if hasattr(options, "sumcheck_routing"):
+            network.sumcheck_routing = options.sumcheck_routing
+        if hasattr(options, "sumcheck_seed"):
+            network.sumcheck_seed = options.sumcheck_seed
         network.garnet_deadlock_threshold = options.garnet_deadlock_threshold
 
         # Create Bridges and connect them to the corresponding links

@@ -97,7 +97,7 @@ class AddrRange
     std::vector<Addr> masks;
 
     /** The value to compare sel with. */
-    uint8_t intlvMatch;
+    Addr intlvMatch;
 
   protected:
     struct Dummy {};
@@ -124,7 +124,7 @@ class AddrRange
                     "Got %d ranges spanning %d interleaving bits.",
                     count, masks.size());
 
-            uint8_t match = 0;
+            Addr match = 0;
             for (auto it = begin_it; it != end_it; it++) {
                 fatal_if(!mergesWith(*it),
                         "Can only merge ranges with the same start, end "
@@ -132,8 +132,9 @@ class AddrRange
                         it->to_string());
 
                 fatal_if(it->intlvMatch != match,
-                        "Expected interleave match %d but got %d when "
-                        "merging.", match, it->intlvMatch);
+                        "Expected interleave match %llu but got %llu when "
+                        "merging.", static_cast<unsigned long long>(match),
+                        static_cast<unsigned long long>(it->intlvMatch));
                 ++match;
             }
             masks.clear();
@@ -181,14 +182,14 @@ class AddrRange
      * @ingroup api_addr_range
      */
     AddrRange(Addr _start, Addr _end, const std::vector<Addr> &_masks,
-              uint8_t _intlv_match)
+              Addr _intlv_match)
         : _start(_start), _end(_end), masks(_masks),
           intlvMatch(_intlv_match)
     {
         // sanity checks
         fatal_if(!masks.empty() && _intlv_match >= 1ULL << masks.size(),
-                 "Match value %d does not fit in %d interleaving bits\n",
-                 _intlv_match, masks.size());
+                 "Match value %llu does not fit in %d interleaving bits\n",
+                 static_cast<unsigned long long>(_intlv_match), masks.size());
     }
 
     /**
@@ -219,14 +220,14 @@ class AddrRange
      */
     AddrRange(Addr _start, Addr _end, uint8_t _intlv_high_bit,
               uint8_t _xor_high_bit, uint8_t _intlv_bits,
-              uint8_t _intlv_match)
+              Addr _intlv_match)
         : _start(_start), _end(_end), masks(_intlv_bits),
           intlvMatch(_intlv_match)
     {
         // sanity checks
         fatal_if(_intlv_bits && _intlv_match >= 1ULL << _intlv_bits,
-                 "Match value %d does not fit in %d interleaving bits\n",
-                 _intlv_match, _intlv_bits);
+                 "Match value %llu does not fit in %d interleaving bits\n",
+                 static_cast<unsigned long long>(_intlv_match), _intlv_bits);
 
         // ignore the XOR bits if not interleaving
         if (_intlv_bits && _xor_high_bit) {
@@ -475,14 +476,14 @@ class AddrRange
         // bits from the address match the interleaving value
         bool in_range = a >= _start && a < _end;
         if (in_range) {
-            auto sel = 0;
+            Addr sel = 0;
             for (unsigned int i = 0; i < masks.size(); i++) {
                 Addr masked = a & masks[i];
                 // The result of an xor operation is 1 if the number
                 // of bits set is odd or 0 othersize, thefore it
                 // suffices to count the number of bits set to
                 // determine the i-th bit of sel.
-                sel |= (popCount(masked) % 2) << i;
+                sel |= Addr(popCount(masked) % 2) << i;
             }
             return sel == intlvMatch;
         }

@@ -47,8 +47,6 @@
 #include "mem/ruby/network/garnet/Router.hh"
 #include "mem/ruby/slicc_interface/Message.hh"
 
-#include "cpu/testers/sumcheck_causal_traffic/SumcheckCausalTraffic.hh"
-
 namespace gem5
 {
 
@@ -62,6 +60,9 @@ RoutingUnit::RoutingUnit(Router *router)
 {
     m_router = router;
     m_sumcheck_adaptive = nullptr;
+    m_sumcheck_num_clusters = 0;
+    m_sumcheck_mesh_rows = 0;
+    m_sumcheck_entries_per_cluster = 0;
     m_routing_table.clear();
     m_weight_table.clear();
 }
@@ -69,14 +70,15 @@ RoutingUnit::RoutingUnit(Router *router)
 RoutingUnit::RoutingUnit(Router *router, const GarnetRouterParams &p)
 {
     m_router = router;
+    m_sumcheck_num_clusters = p.num_clusters;
+    m_sumcheck_mesh_rows = p.mesh_rows;
+    m_sumcheck_entries_per_cluster = p.entries_per_cluster;
     if (p.topology == "SumcheckHierarchy") {
-        m_sumcheck_adaptive = new SumcheckAdaptive(router,
-        this,
-        p.entries_per_cluster,
-        p.mesh_rows,
-        p.entry_congestion_weight,
-        p.sumcheck_routing=="fixed"?MIN_SCORE_:RANDOM_SCORE_,
-        p.sumcheck_seed);
+        m_sumcheck_adaptive = new SumcheckAdaptive(
+            router, this, p.entries_per_cluster, p.mesh_rows,
+            p.entry_congestion_weight,
+            p.sumcheck_routing == "fixed" ? MIN_SCORE_ : RANDOM_SCORE_,
+            p.sumcheck_seed);
     } else {
         m_sumcheck_adaptive = nullptr;
     }
@@ -330,45 +332,43 @@ RoutingUnit::outportComputeCustom(RouteInfo route,
 
 namespace
 {
-constexpr int Workers = 64;
-constexpr int GatewayBase = 64;
-constexpr int Root = 68;
-constexpr int Width = 4;
-
-bool isWorker(int id) { return id >= 0 && id < Workers; }
-bool isGateway(int id) { return id >= GatewayBase && id < Root; }
-int clusterOfWorker(int id) { return id / 16; }
-int clusterOfGateway(int id) { return id - GatewayBase; }
+constexpr unsigned MaxEntriesPerCluster = 4;
 
 std::pair<int, int>
-entryCoord(unsigned entries, unsigned index)
+entryCoord(unsigned width, unsigned entries, unsigned index)
 {
-    static constexpr int coords[4][2] = {{0, 1}, {1, 3}, {2, 0}, {3, 2}};
     if (entries == 1)
-        return {1, 1};
+        return {(width - 1) / 2, (width - 1) / 2};
+
+    const std::pair<int, int> coordinates[MaxEntriesPerCluster] = {
+        {0, (width - 1) / 2},
+        {(width - 1) / 2, width - 1},
+        {width / 2, 0},
+        {width - 1, width / 2},
+    };
     if (entries == 2)
-        return index == 0 ? std::pair<int, int>{0, 1} :
-                            std::pair<int, int>{3, 2};
-    return {coords[index][0], coords[index][1]};
+        return index == 0 ? coordinates[0] : coordinates[3];
+    return coordinates[index];
 }
 
 int
-entryRouter(int cluster, unsigned entries, unsigned index)
+entryRouter(int cluster, unsigned width, unsigned entries, unsigned index)
 {
-    auto [row, col] = entryCoord(entries, index);
-    return cluster * 16 + row * Width + col;
+    auto [row, col] = entryCoord(width, entries, index);
+    return cluster * width * width + row * width + col;
 }
 
 unsigned
-nearestEntry(int worker, unsigned entries)
+nearestEntry(int worker, unsigned width, unsigned entries)
 {
-    const int local = worker % 16;
-    const int row = local / Width;
-    const int col = local % Width;
+    const int workersPerCluster = width * width;
+    const int local = worker % workersPerCluster;
+    const int row = local / width;
+    const int col = local % width;
     unsigned best = 0;
-    int best_distance = 9;
+    int best_distance = 2 * width;
     for (unsigned index = 0; index < entries; ++index) {
-        auto [entry_row, entry_col] = entryCoord(entries, index);
+        auto [entry_row, entry_col] = entryCoord(width, entries, index);
         int distance = std::abs(row - entry_row) + std::abs(col - entry_col);
         if (distance < best_distance) {
             best = index;
@@ -398,18 +398,39 @@ RoutingUnit::outportComputeSumcheck(RouteInfo route)
     const int current = m_router->get_id();
     const int source = route.src_router;
     const int destination = route.dest_router;
-    const unsigned entries =
-        m_router->get_net_ptr()->getEntriesPerCluster();
-    fatal_if(entries != 1 && entries != 2 && entries != 4,
+    const unsigned clusters = m_sumcheck_num_clusters;
+    const unsigned width = m_sumcheck_mesh_rows;
+    const unsigned entries = m_sumcheck_entries_per_cluster;
+    fatal_if(clusters == 0, "Sumcheck requires at least one cluster");
+    fatal_if(width == 0, "Sumcheck cluster width must be positive");
+    fatal_if(entries == 0 || entries > MaxEntriesPerCluster ||
+             (entries & (entries - 1)) != 0,
              "Invalid Sumcheck entry count %u", entries);
+
+    const int workersPerCluster = width * width;
+    const int numWorkers = clusters * workersPerCluster;
+    const int gatewayBase = numWorkers;
+    const int root = gatewayBase + clusters;
+    auto isWorker = [numWorkers](int id) {
+        return id >= 0 && id < numWorkers;
+    };
+    auto isGateway = [gatewayBase, root](int id) {
+        return id >= gatewayBase && id < root;
+    };
+    auto clusterOfWorker = [workersPerCluster](int id) {
+        return id / workersPerCluster;
+    };
+    auto clusterOfGateway = [gatewayBase](int id) {
+        return id - gatewayBase;
+    };
 
     // Only classify a packet when it is injected. At later hops, routing is
     // determined by the current router's role in the hierarchy.
     if (source == current) {
         const bool rootToWorker =
-            source == Root && isWorker(destination);
+            source == root && isWorker(destination);
         const bool workerToRoot =
-            isWorker(source) && destination == Root;
+            isWorker(source) && destination == root;
         fatal_if(!rootToWorker && !workerToRoot,
                  "Unsupported Sumcheck flow %d->%d", source, destination);
     }
@@ -418,35 +439,35 @@ RoutingUnit::outportComputeSumcheck(RouteInfo route)
         fatal_if(!isWorker(current) || !isWorker(target) ||
                  clusterOfWorker(current) != clusterOfWorker(target),
                  "Illegal Sumcheck mesh step %d->%d", current, target);
-        const int here = current % 16;
-        const int there = target % 16;
-        if (here / Width < there / Width)
+        const int here = current % workersPerCluster;
+        const int there = target % workersPerCluster;
+        if (here / width < there / width)
             return outportForDirection("Dim0Pos");
-        if (here / Width > there / Width)
+        if (here / width > there / width)
             return outportForDirection("Dim0Neg");
-        if (here % Width < there % Width)
+        if (here % width < there % width)
             return outportForDirection("Dim1Pos");
-        if (here % Width > there % Width)
+        if (here % width > there % width)
             return outportForDirection("Dim1Neg");
         fatal("Mesh step requested at destination router %d", current);
     };
 
     if (isWorker(current)) {
-        if (destination != Root)
+        if (destination != root)
             return meshOutport(destination);
 
-        const int target = entryRouter(
-            clusterOfWorker(source), entries, nearestEntry(source, entries));
+        const int target = entryRouter(clusterOfWorker(source), width, entries,
+            nearestEntry(source, width, entries));
         return current == target ? outportForDirection("Gateway") :
                                    meshOutport(target);
     }
 
-    if (current == Root)
+    if (current == root)
         return outportForDirection(
             "RootToG" + std::to_string(clusterOfWorker(destination)));
 
     if (isGateway(current)) {
-        if (destination == Root)
+        if (destination == root)
             return outportForDirection("RootUp");
 
         fatal_if(!isWorker(destination) ||
@@ -458,7 +479,8 @@ RoutingUnit::outportComputeSumcheck(RouteInfo route)
         for (unsigned index = 0; index < entries; ++index) {
             int outport = outportForDirection("Entry" + std::to_string(index));
             fatal_if(m_router->getOutportRouterId(outport) !=
-                     entryRouter(clusterOfGateway(current), entries, index),
+                     entryRouter(clusterOfGateway(current), width, entries,
+                                 index),
                      "Gateway %d Entry%u is wired to the wrong router",
                      current, index);
             candidateOutports.push_back(outport);

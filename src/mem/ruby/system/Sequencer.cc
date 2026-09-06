@@ -909,8 +909,12 @@ Sequencer::issueRequest(PacketPtr pkt, RubyRequestType secondary_type)
                     msg->m_tlbiTransactionUid);
         }
     } else {
+        int request_size = pkt->getSize();
+        if (m_runningGarnetStandalone && pkt->req->extraDataValid()) {
+            request_size = pkt->req->getExtraData();
+        }
         msg = std::make_shared<RubyRequest>(clockEdge(), pkt->getAddr(),
-                                            pkt->getSize(), pc, secondary_type,
+                                            request_size, pc, secondary_type,
                                             RubyAccessMode_Supervisor, pkt,
                                             PrefetchBit_No, proc_id, core_id);
 

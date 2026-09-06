@@ -11,6 +11,7 @@ class SumcheckCausalTraffic(ClockedObject):
     block_offset = Param.Int(6, "block offset in bits")
     node_id = Param.Int(0, "Node ID of this tester")
     node_type = Param.Int(0, "Node type: 0=SOURCE, 1=WORKER, 2=NEITHER")
+    worker_index = Param.Int(-1, "Worker's zero-based workload index")
     source_id = Param.Int(0, "Source node ID (for workers to send back to)")
     num_workers = Param.Int(1, "Number of worker nodes")
     worker_ids = VectorParam.Int([], "List of worker node IDs")

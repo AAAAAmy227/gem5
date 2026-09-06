@@ -108,6 +108,9 @@ class RoutingUnit
     std::map<int, PortDirection> m_outports_idx2dirn;
     std::map<PortDirection, int> m_outports_dirn2idx;
     SumcheckAdaptive *m_sumcheck_adaptive;
+    unsigned m_sumcheck_num_clusters;
+    unsigned m_sumcheck_mesh_rows;
+    unsigned m_sumcheck_entries_per_cluster;
 };
 
 } // namespace garnet

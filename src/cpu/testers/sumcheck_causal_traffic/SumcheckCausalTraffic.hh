@@ -35,10 +35,8 @@ class SumcheckCausalTraffic : public ClockedObject
     void notifyArrival(int msgType);
     void notifyArrivalByAddr(Addr addr);
 
-    static Addr encodeAddr(int destId, int msg_type,
-                           unsigned blockSizeBits);
-    static int decodeMsgType(Addr addr,
-                             unsigned blockSizeBits);
+    Addr encodeAddr(int destId, int msgType) const;
+    int decodeMsgType(Addr addr) const;
   protected:
     EventFunctionWrapper tickEvent;
 
@@ -63,10 +61,12 @@ class SumcheckCausalTraffic : public ClockedObject
 
     PacketPtr retryPkt;
     unsigned blockSizeBits;
+    unsigned destinationBits;
 
     //  ========== Basic config for sumcheck ==========
     int nodeId;
     int nodeType;
+    int workerIndex;
 
     int sourceId;
     int numWorkers;
@@ -128,6 +128,7 @@ class SumcheckCausalTraffic : public ClockedObject
     void srcTickAggregate();
 
     void workerTick();
+    int vectorPacketsForWorker() const;
     PacketPtr createSumcheckPacket(
       int destId, int msgType, unsigned packetSize);
 };

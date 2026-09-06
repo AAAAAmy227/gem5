@@ -8,6 +8,11 @@ addToPath("../")
 
 from common import Options
 from ruby import Ruby
+from topologies.SumcheckModel import (
+    DEFAULT_CLUSTER_ROWS,
+    DEFAULT_NUM_CLUSTERS,
+    SUPPORTED_ENTRY_COUNTS,
+)
 
 # Get paths we might need.  It's expected this file is in m5/configs/example.
 config_path = os.path.dirname(os.path.abspath(__file__))
@@ -68,8 +73,8 @@ parser.add_argument(
 parser.add_argument(
     "--entries-per-cluster",
     type=int,
-    default=4,
-    choices=[1, 2, 4],
+    default=max(SUPPORTED_ENTRY_COUNTS),
+    choices=SUPPORTED_ENTRY_COUNTS,
     help="Number of entry candidates per gateway cluster",
 )
 parser.add_argument(
@@ -94,7 +99,7 @@ parser.add_argument(
 parser.add_argument(
     "--num-clusters",
     type=int,
-    default=4,
+    default=DEFAULT_NUM_CLUSTERS,
     help="Number of clusters (gateways) routers in SumcheckHierarchy",
 )
 
@@ -188,6 +193,7 @@ if args.topology == "MeshSumcheck":
         tester = SumcheckCausalTraffic(
             node_id=i,
             node_type=0 if i == 0 else 1,  # 0=SOURCE, 1=WORKER
+            worker_index=-1 if i == 0 else i - 1,
             source_id=src_router_id,
             num_workers=num_routers,
             worker_ids=worker_router_ids,
@@ -202,6 +208,11 @@ if args.topology == "MeshSumcheck":
         )
         cpus.append(tester)
 else:
+    if args.num_clusters <= 0:
+        parser.error("--num-clusters must be positive")
+    if mesh_rows == 0:
+        mesh_rows = DEFAULT_CLUSTER_ROWS
+        args.mesh_rows = mesh_rows
     assert args.routing_algorithm == 3, (
         f"Unsupported routing algorithm: {args.routing_algorithm}. "
         "Only routing_alorithm=3 is allowed for SumcheckHierarchy"
@@ -213,10 +224,15 @@ else:
     src_router_id = num_routers - 1
     args.src_router_id = src_router_id
 
-    expected_cpus = num_clusters * mesh_rows * mesh_rows + num_clusters + 1
+    expected_cpus = num_routers
     assert num_cpus == expected_cpus
-#    assert args.num_dirs == num_cpus
     args.num_cpus = num_cpus
+
+    min_num_dirs = 1 << (num_routers - 1).bit_length()
+    if args.num_dirs < num_routers:
+        args.num_dirs = min_num_dirs
+    elif args.num_dirs & (args.num_dirs - 1):
+        parser.error("--num-dirs must be a power of two")
 
     print(f"SumcheckHierarchy: {num_clusters} clusters, "
           f"each {mesh_rows}x{mesh_rows} mesh")
@@ -242,6 +258,7 @@ else:
         cpus.append(SumcheckCausalTraffic(
             node_id=i,
             node_type=node_type,
+            worker_index=i if i < num_workers else -1,
             source_id=src_router_id,
             num_workers=num_workers,
             worker_ids=worker_router_ids,

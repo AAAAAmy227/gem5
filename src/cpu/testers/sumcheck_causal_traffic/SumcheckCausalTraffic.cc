@@ -1,5 +1,6 @@
 #include "cpu/testers/sumcheck_causal_traffic/SumcheckCausalTraffic.hh"
 
+#include <algorithm>
 #include <cmath>
 #include <string>
 #include <vector>
@@ -19,17 +20,22 @@ namespace gem5
 
 using namespace ruby::garnet;
 
+constexpr unsigned MessageTypeBits = 2;
+constexpr Addr MessageTypeMask = (1U << MessageTypeBits) - 1;
+
 Addr
-SumcheckCausalTraffic::encodeAddr(int destId, int msg_type,
-                                   unsigned blockSizeBits)
+SumcheckCausalTraffic::encodeAddr(int destId, int msgType) const
 {
-    return ((Addr)destId << blockSizeBits) | ((Addr)(uint8_t)msg_type << 17);
+    const unsigned messageTypeShift = blockSizeBits + destinationBits;
+    return ((Addr)destId << blockSizeBits) |
+           ((Addr)(uint8_t)msgType << messageTypeShift);
 }
 
 int
-SumcheckCausalTraffic::decodeMsgType(Addr addr, unsigned blockSizeBits)
+SumcheckCausalTraffic::decodeMsgType(Addr addr) const
 {
-    return (int)((addr >> 17) & 0x3);
+    const unsigned messageTypeShift = blockSizeBits + destinationBits;
+    return (int)((addr >> messageTypeShift) & MessageTypeMask);
 }
 
 SumcheckCausalTraffic::SumcheckCausalTraffic(const Params &p)
@@ -38,8 +44,10 @@ SumcheckCausalTraffic::SumcheckCausalTraffic(const Params &p)
       cachePort(name() + ".sumcheck_port", this),
       retryPkt(nullptr),
       blockSizeBits(p.block_offset),
+      destinationBits(0),
       nodeId(p.node_id),
       nodeType(p.node_type),
+      workerIndex(p.worker_index),
       sourceId(p.source_id),
       numWorkers(p.num_workers),
       numSumcheckRounds(p.num_sumcheck_rounds),
@@ -65,14 +73,28 @@ SumcheckCausalTraffic::SumcheckCausalTraffic(const Params &p)
       numPacketsSent(0),
       injVnet(p.inj_vnet)
 {
+    fatal_if(numWorkers <= 0, "Sumcheck requires at least one worker");
     for (int i = 0; i < numWorkers; i++) {
         workerIds.push_back(p.worker_ids[i]);
     }
+    const int highestEndpoint = std::max(
+        sourceId, *std::max_element(workerIds.begin(), workerIds.end()));
+    while ((1ULL << destinationBits) <= highestEndpoint) {
+        ++destinationBits;
+    }
+    fatal_if(blockSizeBits + destinationBits + MessageTypeBits >
+             sizeof(Addr) * 8,
+             "Sumcheck address encoding exceeds %u-bit Addr",
+             (unsigned)(sizeof(Addr) * 8));
 
     int minPackets = 1 << (numSumcheckRounds - simulateRounds);
-    fatal_if(minPackets % numWorkers != 0,
-             "Sumcheck: 2^{%d-%d}=%d not divisible by %d workers",
+    fatal_if(minPackets < numWorkers,
+             "Sumcheck: 2^{%d-%d}=%d provides no work for some of %d workers",
              numSumcheckRounds, simulateRounds, minPackets, numWorkers);
+    fatal_if(nodeType == WORKER_ &&
+             (workerIndex < 0 || workerIndex >= numWorkers),
+             "Sumcheck worker %d has invalid worker index %d",
+             nodeId, workerIndex);
 
     DPRINTF(SumcheckCausalTraffic,
             "SumcheckCausalTraffic[%d]: nodeType=%d, numWorkers=%d, "
@@ -238,12 +260,21 @@ SumcheckCausalTraffic::srcTickAggregate()
     responseAggregateReceived = 0;
     currentRound++;
 
-    DPRINTF(SumcheckCausalTraffic, "SRC enters to Round %d at tick %d",
-        currentRound, curTick());
 
     if (currentRound > simulateRounds) {
+        DPRINTF(SumcheckCausalTraffic, "SRC enters to Round %d at tick %d",
+            currentRound, curTick());
         return;
     }
+}
+
+int
+SumcheckCausalTraffic::vectorPacketsForWorker() const
+{
+    const int totalPackets = 1 << (numSumcheckRounds - currentRound);
+    const int packetsPerWorker = totalPackets / numWorkers;
+    const int remainder = totalPackets % numWorkers;
+    return packetsPerWorker + (workerIndex < remainder ? 1 : 0);
 }
 
 void
@@ -269,7 +300,7 @@ SumcheckCausalTraffic::workerTick()
         DPRINTF(SumcheckCausalTraffic,
                 "WRK %d compute done -> send respElem (completed=%d/%d)\n",
                 nodeId, completedVectorPacketCount + 1,
-                (1 << (numSumcheckRounds - currentRound)) / numWorkers);
+                vectorPacketsForWorker());
 
         int elementsPerPacket = 0;
         if (currentRound == 1) {
@@ -284,8 +315,7 @@ SumcheckCausalTraffic::workerTick()
         computingVectorPacket = false;
         pendingVectorPacketCount--;
         completedVectorPacketCount++;
-        if (completedVectorPacketCount ==
-            (1 << (numSumcheckRounds - currentRound)) / numWorkers) {
+        if (completedVectorPacketCount == vectorPacketsForWorker()) {
 
             DPRINTF(SumcheckCausalTraffic,
                     "WRK %d send aggregate (round %d), tick=%d\n",
@@ -355,7 +385,7 @@ SumcheckCausalTraffic::notifyArrival(int msgType)
 void
 SumcheckCausalTraffic::notifyArrivalByAddr(Addr addr)
 {
-    int msgType = decodeMsgType(addr, blockSizeBits);
+    int msgType = decodeMsgType(addr);
 
     DPRINTF(SumcheckCausalTraffic,
             "Node %d notifyArrivalByAddr: addr=0x%x msgType=%d\n",
@@ -368,11 +398,14 @@ PacketPtr
 SumcheckCausalTraffic::createSumcheckPacket(int destId, int msgType,
                                             unsigned packetSize)
 {
-    Addr paddr = encodeAddr(destId, msgType, blockSizeBits);
+    Addr paddr = encodeAddr(destId, msgType);
     unsigned access_size = 1;
     RequestPtr req = std::make_shared<Request>(
         paddr, access_size, Request::Flags(), requestorId);
 
+    // Ruby memory accesses must remain within one cache block, so keep the
+    // functional access small and carry the modeled network size separately.
+    req->setExtraData(packetSize);
     req->setContext(nodeId);
     PacketPtr pkt = new Packet(req, MemCmd::ReadReq);
     pkt->dataDynamic(new uint8_t[req->getSize()]);
