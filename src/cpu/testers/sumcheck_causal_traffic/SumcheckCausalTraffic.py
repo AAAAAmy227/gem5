@@ -12,6 +12,8 @@ class SumcheckCausalTraffic(ClockedObject):
     node_id = Param.Int(0, "Node ID of this tester")
     node_type = Param.Int(0, "Node type: 0=SOURCE, 1=WORKER, 2=NEITHER")
     worker_index = Param.Int(-1, "Worker's zero-based workload index")
+    workers_per_cluster = Param.Int(1, "Number of workers in each cluster")
+    destination_bits = Param.Int(1, "Address bits used for destination ID")
     source_id = Param.Int(0, "Source node ID (for workers to send back to)")
     num_workers = Param.Int(1, "Number of worker nodes")
     worker_ids = VectorParam.Int([], "List of worker node IDs")
@@ -23,5 +25,5 @@ class SumcheckCausalTraffic(ClockedObject):
     add_latency = Param.Int(1, "Cycles for 256-bit addition")
     inj_vnet = Param.Int(2, "Vnet to inject packets in")
 
-    test = RequestPort("Port to the memory system to test")
+    test = VectorRequestPort("Root NI lanes, or the worker's single NI port")
     system = Param.System(Parent.any, "System we belong to")

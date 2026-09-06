@@ -11,6 +11,7 @@ from ruby import Ruby
 from topologies.SumcheckModel import (
     DEFAULT_CLUSTER_ROWS,
     DEFAULT_NUM_CLUSTERS,
+    HierarchyModel,
     SUPPORTED_ENTRY_COUNTS,
 )
 
@@ -102,6 +103,13 @@ parser.add_argument(
     default=DEFAULT_NUM_CLUSTERS,
     help="Number of clusters (gateways) routers in SumcheckHierarchy",
 )
+parser.add_argument(
+    "--root-ni-lanes",
+    type=int,
+    default=0,
+    help="Number of parallel root injection/ejection NI lanes. "
+         "0 selects one lane per cluster.",
+)
 
 # -- Source placement --
 parser.add_argument(
@@ -143,12 +151,33 @@ assert args.topology in ("MeshSumcheck", "SumcheckHierarchy"), (
 
 cpus = []
 mesh_rows = args.mesh_rows
-router_to_worker = {}
 
 if args.topology == "MeshSumcheck":
     # -- Determine source router coordinates --
     num_routers = mesh_rows * mesh_rows
-    assert args.num_dirs == num_routers
+    num_workers = num_routers
+    num_clusters = args.num_clusters
+    if num_clusters <= 0 or num_workers % num_clusters:
+        parser.error(
+            "Mesh worker count must be divisible by --num-clusters"
+        )
+    workers_per_cluster = num_workers // num_clusters
+    root_ni_lanes = args.root_ni_lanes or num_clusters
+    if not 1 <= root_ni_lanes <= num_clusters:
+        parser.error(
+            "root_ni_lanes must be between 1 and num_clusters"
+        )
+    args.root_ni_lanes = root_ni_lanes
+
+    root_directory_ids = tuple(
+        num_routers + lane for lane in range(root_ni_lanes)
+    )
+    required_dirs = root_directory_ids[-1] + 1
+    min_num_dirs = 1 << (required_dirs - 1).bit_length()
+    if args.num_dirs < min_num_dirs:
+        args.num_dirs = min_num_dirs
+    elif args.num_dirs & (args.num_dirs - 1):
+        parser.error("--num-dirs must be a power of two")
 
     if args.src_x is not None and args.src_y is not None:
         src_x = args.src_x
@@ -163,103 +192,30 @@ if args.topology == "MeshSumcheck":
 
     src_router_id = src_y * mesh_rows + src_x
     args.src_router_id = src_router_id
-    num_cpus = num_routers + 1  # 1 SOURCE + num_routers WORKERs
+    num_cpu_controllers = root_ni_lanes + num_workers
 
     # Override num_cpus (Options.addNoISAOptions sets a default)
-    args.num_cpus = num_cpus
+    args.num_cpus = num_cpu_controllers
 
     print(f"Mesh: {mesh_rows}x{mesh_rows} ({num_routers} routers)")
     print(f"Source at ({src_x}, {src_y}), router_id={src_router_id}")
-    print(f"Total CPUs: {num_cpus} (1 SOURCE + {num_routers} WORKERs)")
-
-    # -- Create SumcheckCausalTraffic instances --
-    # CPU 0 = SOURCE, CPU 1..num_routers = WORKERs
-
-    router_to_worker[src_router_id] = [0, 1]
-    other_routers = [r for r in range(num_routers) if r != src_router_id]
-    for i in range(2, num_cpus):
-        router_to_worker[other_routers[i - 2]] = [i]
-
-    worker_router_ids = []
-
-    for cpu_id in range(1, num_cpus):
-        if cpu_id == 1:
-            router_id = src_router_id
-        else:
-            router_id = other_routers[cpu_id - 2]
-        worker_router_ids.append(router_id)
-
-    for i in range(num_cpus):
-        tester = SumcheckCausalTraffic(
-            node_id=i,
-            node_type=0 if i == 0 else 1,  # 0=SOURCE, 1=WORKER
-            worker_index=-1 if i == 0 else i - 1,
-            source_id=src_router_id,
-            num_workers=num_routers,
-            worker_ids=worker_router_ids,
-            num_sumcheck_rounds=args.num_sumcheck_rounds,
-            simulate_rounds=args.simulate_rounds,
-            poly_degree=args.poly_degree,
-            element_bytes=args.element_bytes,
-            multiply_latency=args.multiply_latency,
-            add_latency=args.add_latency,
-            block_offset=6,
-            inj_vnet=0,
-        )
-        cpus.append(tester)
-else:
-    if args.num_clusters <= 0:
-        parser.error("--num-clusters must be positive")
-    if mesh_rows == 0:
-        mesh_rows = DEFAULT_CLUSTER_ROWS
-        args.mesh_rows = mesh_rows
-    assert args.routing_algorithm == 3, (
-        f"Unsupported routing algorithm: {args.routing_algorithm}. "
-        "Only routing_alorithm=3 is allowed for SumcheckHierarchy"
-    )
-    num_clusters = args.num_clusters
-    num_workers = num_clusters * mesh_rows * mesh_rows
-    num_routers = num_workers + num_clusters + 1
-    num_cpus = num_routers
-    src_router_id = num_routers - 1
-    args.src_router_id = src_router_id
-
-    expected_cpus = num_routers
-    assert num_cpus == expected_cpus
-    args.num_cpus = num_cpus
-
-    min_num_dirs = 1 << (num_routers - 1).bit_length()
-    if args.num_dirs < num_routers:
-        args.num_dirs = min_num_dirs
-    elif args.num_dirs & (args.num_dirs - 1):
-        parser.error("--num-dirs must be a power of two")
-
-    print(f"SumcheckHierarchy: {num_clusters} clusters, "
-          f"each {mesh_rows}x{mesh_rows} mesh")
-    print(f"Total routers: {num_routers} "
-          f"({num_workers} workers + {num_clusters} gateways "
-          f"+ 1 root)")
-    print(f"Root at router_id={src_router_id}")
-    print(f"Total CPUs: {num_cpus}")
-
-    for r in range(num_routers):
-        router_to_worker[r] = [r]
+    print(f"Root NI lanes: {root_ni_lanes}")
+    print(f"Total L1 controllers: {num_cpu_controllers}")
 
     worker_router_ids = list(range(num_workers))
+    destination_bits = (args.num_dirs - 1).bit_length()
 
-    for i in range(num_cpus):
-        if i < num_workers:
-            node_type = 1
-        elif i < num_workers + num_clusters:
-            node_type = 2
-        else:
-            node_type = 0
-
+    for worker in range(num_workers):
+        source_directory_id = root_directory_ids[
+            (worker // workers_per_cluster) % root_ni_lanes
+        ]
         cpus.append(SumcheckCausalTraffic(
-            node_id=i,
-            node_type=node_type,
-            worker_index=i if i < num_workers else -1,
-            source_id=src_router_id,
+            node_id=worker,
+            node_type=1,
+            worker_index=worker,
+            workers_per_cluster=workers_per_cluster,
+            destination_bits=destination_bits,
+            source_id=source_directory_id,
             num_workers=num_workers,
             worker_ids=worker_router_ids,
             num_sumcheck_rounds=args.num_sumcheck_rounds,
@@ -271,6 +227,117 @@ else:
             block_offset=6,
             inj_vnet=0,
         ))
+    cpus.append(SumcheckCausalTraffic(
+        node_id=num_workers,
+        node_type=0,
+        worker_index=-1,
+        workers_per_cluster=workers_per_cluster,
+        destination_bits=destination_bits,
+        source_id=root_directory_ids[0],
+        num_workers=num_workers,
+        worker_ids=worker_router_ids,
+        num_sumcheck_rounds=args.num_sumcheck_rounds,
+        simulate_rounds=args.simulate_rounds,
+        poly_degree=args.poly_degree,
+        element_bytes=args.element_bytes,
+        multiply_latency=args.multiply_latency,
+        add_latency=args.add_latency,
+        block_offset=6,
+        inj_vnet=0,
+    ))
+else:
+    if args.num_clusters <= 0:
+        parser.error("--num-clusters must be positive")
+    if mesh_rows == 0:
+        mesh_rows = DEFAULT_CLUSTER_ROWS
+        args.mesh_rows = mesh_rows
+    assert args.routing_algorithm == 3, (
+        f"Unsupported routing algorithm: {args.routing_algorithm}. "
+        "Only routing_alorithm=3 is allowed for SumcheckHierarchy"
+    )
+    num_clusters = args.num_clusters
+    model = HierarchyModel(
+        num_clusters=num_clusters,
+        rows=mesh_rows,
+        cols=mesh_rows,
+    )
+    root_ni_lanes = args.root_ni_lanes or num_clusters
+    try:
+        model.check_root_ni_lanes(root_ni_lanes)
+    except ValueError as error:
+        parser.error(str(error))
+    args.root_ni_lanes = root_ni_lanes
+
+    num_workers = model.num_workers
+    num_routers = model.num_routers
+    src_router_id = model.root
+    args.src_router_id = src_router_id
+
+    # Workers have one NI each. The SOURCE tester is connected to
+    # root_ni_lanes independent controllers/NIs.
+    num_cpu_controllers = num_workers + root_ni_lanes
+    args.num_cpus = num_cpu_controllers
+
+    min_num_dirs = model.required_directory_count(root_ni_lanes)
+    if args.num_dirs < min_num_dirs:
+        args.num_dirs = min_num_dirs
+    elif args.num_dirs & (args.num_dirs - 1):
+        parser.error("--num-dirs must be a power of two")
+
+    print(f"SumcheckHierarchy: {num_clusters} clusters, "
+          f"each {mesh_rows}x{mesh_rows} mesh")
+    print(f"Total routers: {num_routers} "
+          f"({num_workers} workers + {num_clusters} gateways "
+          f"+ 1 root)")
+    print(f"Root at router_id={src_router_id}")
+    print(f"Root NI lanes: {root_ni_lanes} "
+          f"(cluster c uses lane c % {root_ni_lanes})")
+    print(f"Total L1 controllers: {num_cpu_controllers}")
+
+    worker_router_ids = list(range(num_workers))
+    root_directory_ids = model.root_directory_ids(root_ni_lanes)
+    destination_bits = (args.num_dirs - 1).bit_length()
+
+    for i in range(num_workers):
+        source_directory_id = root_directory_ids[
+            model.lane_for_worker(i, root_ni_lanes)
+        ]
+        cpus.append(SumcheckCausalTraffic(
+            node_id=i,
+            node_type=1,
+            worker_index=i,
+            workers_per_cluster=model.workers_per_cluster,
+            destination_bits=destination_bits,
+            source_id=source_directory_id,
+            num_workers=num_workers,
+            worker_ids=worker_router_ids,
+            num_sumcheck_rounds=args.num_sumcheck_rounds,
+            simulate_rounds=args.simulate_rounds,
+            poly_degree=args.poly_degree,
+            element_bytes=args.element_bytes,
+            multiply_latency=args.multiply_latency,
+            add_latency=args.add_latency,
+            block_offset=6,
+            inj_vnet=0,
+        ))
+    cpus.append(SumcheckCausalTraffic(
+        node_id=src_router_id,
+        node_type=0,
+        worker_index=-1,
+        workers_per_cluster=model.workers_per_cluster,
+        destination_bits=destination_bits,
+        source_id=root_directory_ids[0],
+        num_workers=num_workers,
+        worker_ids=worker_router_ids,
+        num_sumcheck_rounds=args.num_sumcheck_rounds,
+        simulate_rounds=args.simulate_rounds,
+        poly_degree=args.poly_degree,
+        element_bytes=args.element_bytes,
+        multiply_latency=args.multiply_latency,
+        add_latency=args.add_latency,
+        block_offset=6,
+        inj_vnet=0,
+    ))
 
 # create the desired simulated system
 system = System(cpu=cpus, mem_ranges=[AddrRange(args.mem_size)])
@@ -290,8 +357,13 @@ system.ruby.clk_domain = SrcClockDomain(
 )
 
 # -- Connect tester ports to ruby ports --
-for i in range(num_cpus):
-    cpus[i].test = system.ruby._cpu_ports[i].in_ports
+for worker in range(num_workers):
+    cpus[worker].test = system.ruby._cpu_ports[worker].in_ports
+source_tester = cpus[num_workers]
+for lane in range(args.root_ni_lanes):
+    source_tester.test = system.ruby._cpu_ports[
+        num_workers + lane
+    ].in_ports
 
 # -- Set NI sumcheck_tester for notifyArrival callback --
 # The NI's sumcheck_tester is set from GarnetNetwork.py's Param.
@@ -301,15 +373,15 @@ for i in range(num_cpus):
 # in system.ruby.network.netifs, indexed in the same order as
 # the L1 controllers (which are in the same order as cpus).
 
-for router_id in range(num_routers):
-    dir_ni = system.ruby.network.netifs[num_cpus + router_id]
-    workers = router_to_worker.get(router_id, [])
-    for cpu_idx in workers:
-        tester = cpus[cpu_idx]
-        if int(tester.node_type) == 0:
-            dir_ni.sumcheck_tester_src = tester
-        elif int(tester.node_type) == 1:
-            dir_ni.sumcheck_tester_worker = tester
+directory_ni_base = num_cpu_controllers
+for worker in range(num_workers):
+    system.ruby.network.netifs[
+        directory_ni_base + worker
+    ].sumcheck_tester_worker = cpus[worker]
+for directory_id in root_directory_ids:
+    system.ruby.network.netifs[
+        directory_ni_base + directory_id
+    ].sumcheck_tester_src = source_tester
 
 # -- Run simulation --
 root = Root(full_system=False, system=system)

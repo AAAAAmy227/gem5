@@ -6,10 +6,8 @@ from common import FileSystemConfig
 from topologies.BaseTopology import SimpleTopology
 
 # Mesh topology for Sumcheck Causal Traffic.
-# Supports placing SOURCE and one WORKER on the same router
-# (specified by options.src_router_id), while all other
-# WORKERs occupy one router each. XY routing is enforced
-# (using link weights) to guarantee deadlock freedom.
+# All root NI lanes share the source router, while worker i is attached to
+# router i. XY routing is enforced by link weights.
 
 
 class MeshSumcheck(SimpleTopology):
@@ -25,6 +23,7 @@ class MeshSumcheck(SimpleTopology):
         num_rows = options.mesh_rows
         num_routers = num_rows * num_rows
         src_router_id = options.src_router_id
+        root_lanes = options.root_ni_lanes
 
         link_latency = options.link_latency  # used by simple and garnet
         router_latency = options.router_latency  # only used by garnet
@@ -33,11 +32,12 @@ class MeshSumcheck(SimpleTopology):
         num_columns = int(num_routers / num_rows)
         assert num_columns * num_rows == num_routers
 
-        # There is one router with two CPUs (src/worker)
-        assert (
-            num_cpus == num_routers + 1
-        ), f"""Expected num_cpus={num_routers+1}
-            (1 src + {num_routers} workers), got {num_cpus}"""
+        expected_cpus = num_routers + root_lanes
+        assert num_cpus == expected_cpus, (
+            f"Expected num_cpus={expected_cpus} "
+            f"({root_lanes} root lanes + {num_routers} workers), "
+            f"got {num_cpus}"
+        )
 
         routers = [
             Router(router_id=i, latency=router_latency)
@@ -47,14 +47,9 @@ class MeshSumcheck(SimpleTopology):
 
         link_count = 0
 
-        other_routers = [r for r in range(num_routers) if r != src_router_id]
-
         ext_links = []
         for i in range(num_cpus):
-            if i == 0 or i == 1:
-                router_id = src_router_id  # CPU0 & CPU1 on the same router
-            else:
-                router_id = other_routers[i - 2]
+            router_id = i if i < num_routers else src_router_id
 
             ext_links.append(
                 ExtLink(
@@ -68,7 +63,7 @@ class MeshSumcheck(SimpleTopology):
 
         num_dir_nodes = len(nodes) - num_cpus
         for i in range(num_dir_nodes):
-            router_id = i % num_routers
+            router_id = i if i < num_routers else src_router_id
             ext_links.append(
                 ExtLink(
                     link_id=link_count,

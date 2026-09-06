@@ -56,6 +56,30 @@ class HierarchyModel:
     def num_routers(self):
         return self.root + 1
 
+    def check_root_ni_lanes(self, lanes):
+        if not 1 <= lanes <= self.num_clusters:
+            raise ValueError(
+                "root_ni_lanes must be between 1 and num_clusters "
+                f"({self.num_clusters}); got {lanes}"
+            )
+
+    def lane_for_cluster(self, cluster, lanes):
+        if not 0 <= cluster < self.num_clusters:
+            raise ValueError(f"invalid cluster {cluster}")
+        self.check_root_ni_lanes(lanes)
+        return cluster % lanes
+
+    def lane_for_worker(self, worker, lanes):
+        return self.lane_for_cluster(self.worker_cluster(worker), lanes)
+
+    def root_directory_ids(self, lanes):
+        self.check_root_ni_lanes(lanes)
+        return tuple(self.root + lane for lane in range(lanes))
+
+    def required_directory_count(self, lanes):
+        required = self.root_directory_ids(lanes)[-1] + 1
+        return 1 << (required - 1).bit_length()
+
     def entry_coordinates(self, entries):
         check_p(entries)
         coordinates = (

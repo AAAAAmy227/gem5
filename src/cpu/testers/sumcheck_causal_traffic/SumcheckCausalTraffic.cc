@@ -41,13 +41,14 @@ SumcheckCausalTraffic::decodeMsgType(Addr addr) const
 SumcheckCausalTraffic::SumcheckCausalTraffic(const Params &p)
     : ClockedObject(p),
       tickEvent([this]{ tick(); }, name(), false, Event::CPU_Tick_Pri),
-      cachePort(name() + ".sumcheck_port", this),
-      retryPkt(nullptr),
       blockSizeBits(p.block_offset),
-      destinationBits(0),
+      destinationBits(p.destination_bits),
       nodeId(p.node_id),
       nodeType(p.node_type),
       workerIndex(p.worker_index),
+      workersPerCluster(p.workers_per_cluster),
+      numClusters(0),
+      numInjectionLanes(p.port_test_connection_count),
       sourceId(p.source_id),
       numWorkers(p.num_workers),
       numSumcheckRounds(p.num_sumcheck_rounds),
@@ -58,9 +59,9 @@ SumcheckCausalTraffic::SumcheckCausalTraffic(const Params &p)
       multiplyLatency(p.multiply_latency),
       addLatency(p.add_latency),
       sourceState(SEND_VECTOR_),
-      sendVectorWorkerIdx(0),
       sendVectorPacketIdx(0),
-      sendChalWorkerIdx(0),
+      preparedVectorRound(0),
+      preparedChallengeRound(0),
       responseElementPacketReceived(0),
       responseAggregateReceived(0),
       aggregateStartTick(0),
@@ -74,14 +75,31 @@ SumcheckCausalTraffic::SumcheckCausalTraffic(const Params &p)
       injVnet(p.inj_vnet)
 {
     fatal_if(numWorkers <= 0, "Sumcheck requires at least one worker");
+    fatal_if(numInjectionLanes <= 0,
+             "Sumcheck tester %d has no connected injection port", nodeId);
+    fatal_if(workersPerCluster <= 0 ||
+             numWorkers % workersPerCluster != 0,
+             "Invalid workers_per_cluster=%d for %d workers",
+             workersPerCluster, numWorkers);
+    numClusters = numWorkers / workersPerCluster;
+    fatal_if(destinationBits == 0,
+             "Sumcheck destination_bits must be positive");
+    for (int lane = 0; lane < numInjectionLanes; ++lane) {
+        cachePorts.push_back(new CpuPort(
+            csprintf("%s.sumcheck_port[%d]", name(), lane), this, lane));
+    }
+    outboundQueues.resize(numInjectionLanes);
+    retryPending.resize(numInjectionLanes, false);
+    vectorDestinations.resize(numInjectionLanes);
+    challengeDestinations.resize(numInjectionLanes);
     for (int i = 0; i < numWorkers; i++) {
         workerIds.push_back(p.worker_ids[i]);
     }
     const int highestEndpoint = std::max(
         sourceId, *std::max_element(workerIds.begin(), workerIds.end()));
-    while ((1ULL << destinationBits) <= highestEndpoint) {
-        ++destinationBits;
-    }
+    fatal_if(highestEndpoint >= (1ULL << destinationBits),
+             "Endpoint %d does not fit in %u destination bits",
+             highestEndpoint, destinationBits);
     fatal_if(blockSizeBits + destinationBits + MessageTypeBits >
              sizeof(Addr) * 8,
              "Sumcheck address encoding exceeds %u-bit Addr",
@@ -102,6 +120,13 @@ SumcheckCausalTraffic::SumcheckCausalTraffic(const Params &p)
             nodeId, nodeType, numWorkers, numSumcheckRounds,
             simulateRounds, polyDegree);
 
+}
+
+SumcheckCausalTraffic::~SumcheckCausalTraffic()
+{
+    for (auto *port : cachePorts) {
+        delete port;
+    }
 }
 
 void
@@ -134,6 +159,10 @@ SumcheckCausalTraffic::tick()
         return;
     }
 
+    for (int lane = 0; lane < numInjectionLanes; ++lane) {
+        trySend(lane);
+    }
+
     switch (nodeType) {
     case SOURCE_:
         switch (sourceState) {
@@ -158,29 +187,32 @@ SumcheckCausalTraffic::tick()
 void
 SumcheckCausalTraffic::srcTickSendChallenge()
 {
-    int destWorkerId = workerIds[sendChalWorkerIdx];
-    PacketPtr pkt = createSumcheckPacket(destWorkerId,
-                CHALLENGE_, elementBytes);
-    DPRINTF(SumcheckCausalTraffic,
-            "SRC Round %d: sendChallenge to Worker %d\n",
-            currentRound, destWorkerId);
+    prepareChallengeDestinations();
+    for (int lane = 0; lane < numInjectionLanes; ++lane) {
+        if (challengeDestinations[lane].empty()) {
+            continue;
+        }
+        int destWorkerId = challengeDestinations[lane].front();
+        challengeDestinations[lane].pop_front();
+        enqueuePkt(createSumcheckPacket(
+            destWorkerId, CHALLENGE_, elementBytes), lane);
+        DPRINTF(SumcheckCausalTraffic,
+                "SRC Round %d lane %d: challenge to Worker %d\n",
+                currentRound, lane, destWorkerId);
+    }
 
-    sendPkt(pkt);
-    sendChalWorkerIdx += 1;
-
-    if (sendChalWorkerIdx >= numWorkers) {
+    if (allDestinationQueuesEmpty(challengeDestinations)) {
         DPRINTF(SumcheckCausalTraffic,
                 "SRC enters Round %d State [SEND_VECTOR_] at tick %d",
             currentRound, curTick());
         sourceState = SEND_VECTOR_;
-        sendChalWorkerIdx = 0;
     }
 }
 
 void
 SumcheckCausalTraffic::srcTickSendVector()
 {
-    int totalPackets = (1 << (numSumcheckRounds - currentRound));
+    prepareVectorDestinations();
     int elementsPerPacket = 0;
 
     if (currentRound == 1) {
@@ -188,31 +220,96 @@ SumcheckCausalTraffic::srcTickSendVector()
     } else {
         elementsPerPacket = 4 * polyDegree;
     }
-    int destWorkerId = workerIds[sendVectorWorkerIdx];
-    PacketPtr pkt = createSumcheckPacket(destWorkerId,
-                VECTOR_ELEMENT_, elementsPerPacket * elementBytes);
-
-    DPRINTF(SumcheckCausalTraffic,
-            "SRC Round %d: sendVector[%d/%d] to Worker %d\n",
-            currentRound, sendVectorPacketIdx + 1,
-            (1 << (numSumcheckRounds - currentRound)), destWorkerId);
-
-    sendPkt(pkt);
-    sendVectorPacketIdx += 1;
-
-    sendVectorWorkerIdx += 1;
-    if (sendVectorWorkerIdx >= numWorkers) {
-        sendVectorWorkerIdx = 0;
+    for (int lane = 0; lane < numInjectionLanes; ++lane) {
+        if (vectorDestinations[lane].empty()) {
+            continue;
+        }
+        int destWorkerId = vectorDestinations[lane].front();
+        vectorDestinations[lane].pop_front();
+        enqueuePkt(createSumcheckPacket(
+            destWorkerId, VECTOR_ELEMENT_,
+            elementsPerPacket * elementBytes), lane);
+        ++sendVectorPacketIdx;
+        DPRINTF(SumcheckCausalTraffic,
+                "SRC Round %d lane %d: sendVector[%d] to Worker %d\n",
+                currentRound, lane, sendVectorPacketIdx, destWorkerId);
     }
 
-    if (sendVectorPacketIdx >= totalPackets) {
+    if (allDestinationQueuesEmpty(vectorDestinations)) {
         DPRINTF(SumcheckCausalTraffic,
                 "SRC enters Round %d State [WAIT_RESPONSE] at tick %d",
                 currentRound, curTick());
         sourceState = WAIT_RESPONSE_;
-        sendVectorWorkerIdx = sendVectorPacketIdx = 0;
+        sendVectorPacketIdx = 0;
     }
 }
+
+int
+SumcheckCausalTraffic::laneForWorkerIndex(int index) const
+{
+    const int cluster = index / workersPerCluster;
+    return cluster % numInjectionLanes;
+}
+
+int
+SumcheckCausalTraffic::workerAtSchedulePosition(int position) const
+{
+    const int cluster = position % numClusters;
+    const int localWorker = position / numClusters;
+    return cluster * workersPerCluster + localWorker;
+}
+
+int
+SumcheckCausalTraffic::schedulePositionForWorker(int index) const
+{
+    const int cluster = index / workersPerCluster;
+    const int localWorker = index % workersPerCluster;
+    return localWorker * numClusters + cluster;
+}
+
+bool
+SumcheckCausalTraffic::allDestinationQueuesEmpty(
+    const std::vector<std::deque<int>> &queues) const
+{
+    return std::all_of(queues.begin(), queues.end(),
+                       [](const auto &queue) { return queue.empty(); });
+}
+
+void
+SumcheckCausalTraffic::prepareChallengeDestinations()
+{
+    if (preparedChallengeRound == currentRound) {
+        return;
+    }
+    for (auto &queue : challengeDestinations) {
+        queue.clear();
+    }
+    for (int position = 0; position < numWorkers; ++position) {
+        const int worker = workerAtSchedulePosition(position);
+        challengeDestinations[laneForWorkerIndex(worker)].push_back(
+            workerIds[worker]);
+    }
+    preparedChallengeRound = currentRound;
+}
+
+void
+SumcheckCausalTraffic::prepareVectorDestinations()
+{
+    if (preparedVectorRound == currentRound) {
+        return;
+    }
+    for (auto &queue : vectorDestinations) {
+        queue.clear();
+    }
+    const int totalPackets = 1 << (numSumcheckRounds - currentRound);
+    for (int packet = 0; packet < totalPackets; ++packet) {
+        const int worker = workerAtSchedulePosition(packet % numWorkers);
+        vectorDestinations[laneForWorkerIndex(worker)].push_back(
+            workerIds[worker]);
+    }
+    preparedVectorRound = currentRound;
+}
+
 void
 SumcheckCausalTraffic::srcTickWaitResponse()
 {
@@ -274,7 +371,8 @@ SumcheckCausalTraffic::vectorPacketsForWorker() const
     const int totalPackets = 1 << (numSumcheckRounds - currentRound);
     const int packetsPerWorker = totalPackets / numWorkers;
     const int remainder = totalPackets % numWorkers;
-    return packetsPerWorker + (workerIndex < remainder ? 1 : 0);
+    return packetsPerWorker +
+        (schedulePositionForWorker(workerIndex) < remainder ? 1 : 0);
 }
 
 void
@@ -310,7 +408,7 @@ SumcheckCausalTraffic::workerTick()
         }
         PacketPtr pkt = createSumcheckPacket(sourceId,
             RESPONSE_ELEMENT_, elementsPerPacket * elementBytes);
-        sendPkt(pkt);
+        enqueuePkt(pkt);
 
         computingVectorPacket = false;
         pendingVectorPacketCount--;
@@ -323,7 +421,7 @@ SumcheckCausalTraffic::workerTick()
 
             PacketPtr aggregate_pkt = createSumcheckPacket(sourceId,
                 RESPONSE_AGGREGATE_, (polyDegree + 1) * elementBytes);
-            sendPkt(aggregate_pkt);
+            enqueuePkt(aggregate_pkt);
 
             currentRound++;
             pendingVectorPacketCount = 0;
@@ -423,25 +521,42 @@ SumcheckCausalTraffic::CpuPort::recvTimingResp(PacketPtr pkt)
 void
 SumcheckCausalTraffic::CpuPort::recvReqRetry()
 {
-    tester->doRetry();
+    tester->doRetry(laneId);
 }
 
 void
-SumcheckCausalTraffic::sendPkt(PacketPtr pkt)
+SumcheckCausalTraffic::enqueuePkt(PacketPtr pkt, int lane)
 {
-    if (!cachePort.sendTimingReq(pkt)) {
-        retryPkt = pkt; // RubyPort will retry sending
+    fatal_if(lane < 0 || lane >= numInjectionLanes,
+             "Invalid injection lane %d for tester %d", lane, nodeId);
+    outboundQueues[lane].push_back(pkt);
+    ++numPacketsSent;
+    trySend(lane);
+}
+
+void
+SumcheckCausalTraffic::trySend(int lane)
+{
+    if (retryPending[lane] || outboundQueues[lane].empty()) {
+        return;
     }
-    numPacketsSent++;
+    PacketPtr pkt = outboundQueues[lane].front();
+    if (cachePorts[lane]->sendTimingReq(pkt)) {
+        outboundQueues[lane].pop_front();
+    } else {
+        retryPending[lane] = true;
+    }
 }
 
 Port &
 SumcheckCausalTraffic::getPort(const std::string &if_name, PortID idx)
 {
-    if (if_name == "test")
-        return cachePort;
-    else
+    if (if_name != "test") {
         return ClockedObject::getPort(if_name, idx);
+    }
+    fatal_if(idx < 0 || idx >= cachePorts.size(),
+             "Unknown Sumcheck test port index %d", idx);
+    return *cachePorts[idx];
 }
 
 void
@@ -458,10 +573,16 @@ SumcheckCausalTraffic::completeRequest(PacketPtr pkt)
 }
 
 void
-SumcheckCausalTraffic::doRetry()
+SumcheckCausalTraffic::doRetry(PortID lane)
 {
-    if (cachePort.sendTimingReq(retryPkt)) {
-        retryPkt = NULL;
+    fatal_if(lane < 0 || lane >= cachePorts.size(),
+             "Retry on invalid Sumcheck lane %d", lane);
+    fatal_if(!retryPending[lane] || outboundQueues[lane].empty(),
+             "Unexpected retry on Sumcheck lane %d", lane);
+    retryPending[lane] = false;
+    trySend(lane);
+    while (!retryPending[lane] && !outboundQueues[lane].empty()) {
+        trySend(lane);
     }
 }
 

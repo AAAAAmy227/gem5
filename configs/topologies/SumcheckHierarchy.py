@@ -33,13 +33,40 @@ class SumcheckHierarchy(SimpleTopology):
             for i in range(model.num_routers)
         ]
         network.routers = routers
-        network.ext_links = [
-            ExtLink(
-                link_id=i, ext_node=node,
-                int_node=routers[i % model.num_routers],
-                latency=options.link_latency)
-            for i, node in enumerate(self.nodes)
-        ]
+        root_lanes = options.root_ni_lanes
+        root_directory_ids = set(model.root_directory_ids(root_lanes))
+        expected_l1_controllers = model.num_workers + root_lanes
+        if options.num_cpus != expected_l1_controllers:
+            fatal(
+                "SumcheckHierarchy expected "
+                f"{expected_l1_controllers} L1 controllers; "
+                f"got {options.num_cpus}"
+            )
+
+        ext_links = []
+        for index, node in enumerate(self.nodes):
+            if index < options.num_cpus:
+                # One L1/NI per worker, followed by all root injection
+                # lanes. Every root lane enters the root router.
+                router_id = (
+                    index if index < model.num_workers else model.root
+                )
+            else:
+                directory_id = index - options.num_cpus
+                if directory_id < model.root:
+                    router_id = directory_id
+                elif directory_id in root_directory_ids:
+                    # Worker responses select one of these directory IDs by
+                    # source cluster. All of them eject at the root router.
+                    router_id = model.root
+                else:
+                    # Padding directories required by power-of-two address
+                    # interleaving are unused by the Sumcheck workload.
+                    router_id = model.root
+            ext_links.append(ExtLink(
+                link_id=index, ext_node=node, int_node=routers[router_id],
+                latency=options.link_latency))
+        network.ext_links = ext_links
 
         link_id = len(network.ext_links)
         int_links = []
