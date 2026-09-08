@@ -33,11 +33,12 @@ class SumcheckHierarchy(SimpleTopology):
             for i in range(model.num_routers)
         ]
         network.routers = routers
-        root_lanes = options.root_ni_lanes
+        root_ni_lanes = options.root_ni_lanes
+        root_dir_lanes = getattr(options, 'root_dir_lanes', root_ni_lanes)
         root_ejection_directory_ids = set(
-            model.root_ejection_directory_ids(root_lanes)
+            model.root_ejection_directory_ids(root_dir_lanes)
         )
-        expected_l1_controllers = model.num_workers + root_lanes
+        expected_l1_controllers = model.num_workers + root_ni_lanes
         if options.num_cpus != expected_l1_controllers:
             fatal(
                 "SumcheckHierarchy expected "

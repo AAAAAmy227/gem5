@@ -79,10 +79,16 @@ parser.add_argument(
     help="Number of entry candidates per gateway cluster",
 )
 parser.add_argument(
-    "--entry-congestion-weight",
+    "--alpha",
     type=float,
     default=0.0,
-    help="Congestion weight lambda for adaptive routing",
+    help="Weight for gateway-to-entry congestion",
+)
+parser.add_argument(
+    "--beta",
+    type=float,
+    default=0.0,
+    help="Weight for entry-to-mesh congestion"
 )
 parser.add_argument(
     "--sumcheck-seed",
@@ -109,6 +115,14 @@ parser.add_argument(
     default=0,
     help="Number of parallel root injection/ejection NI lanes. "
          "0 selects one lane per cluster.",
+)
+
+parser.add_argument(
+    "--root-dir-lanes",
+    type=int,
+    default=None,
+    help="Number of root ejection directories. "
+         "Defaults to --root-ni-lanes if not set."
 )
 
 # -- Source placement --
@@ -168,11 +182,17 @@ if args.topology == "MeshSumcheck":
             "root_ni_lanes must be between 1 and num_clusters"
         )
     args.root_ni_lanes = root_ni_lanes
+    
+    if args.root_dir_lanes is not None:
+        root_dir_lanes = args.root_dir_lanes
+    else:
+        root_dir_lanes = root_ni_lanes
+    args.root_dir_lanes = root_dir_lanes
 
     # Garnet standalone requests inject through L1 NIs and eject through
     # directory NIs. Give every root lane a matching response/ejection endpoint.
     root_ejection_directory_ids = tuple(
-        num_routers + lane for lane in range(root_ni_lanes)
+        num_routers + lane for lane in range(root_dir_lanes)
     )
     required_dirs = root_ejection_directory_ids[-1] + 1
     min_num_dirs = 1 << (required_dirs - 1).bit_length()
@@ -209,7 +229,7 @@ if args.topology == "MeshSumcheck":
 
     for worker in range(num_workers):
         source_directory_id = root_ejection_directory_ids[
-            (worker // workers_per_cluster) % root_ni_lanes
+            (worker // workers_per_cluster) % root_dir_lanes
         ]
         cpus.append(SumcheckCausalTraffic(
             node_id=worker,
@@ -270,6 +290,12 @@ else:
         parser.error(str(error))
     args.root_ni_lanes = root_ni_lanes
 
+    if args.root_dir_lanes is not None:
+        root_dir_lanes = args.root_dir_lanes
+    else:
+        root_dir_lanes = root_ni_lanes
+    args.root_dir_lanes = root_dir_lanes
+
     num_workers = model.num_workers
     num_routers = model.num_routers
     src_router_id = model.root
@@ -280,7 +306,7 @@ else:
     num_cpu_controllers = num_workers + root_ni_lanes
     args.num_cpus = num_cpu_controllers
 
-    min_num_dirs = model.required_directory_count(root_ni_lanes)
+    min_num_dirs = model.required_directory_count(root_dir_lanes)
     if args.num_dirs < min_num_dirs:
         args.num_dirs = min_num_dirs
     elif args.num_dirs & (args.num_dirs - 1):
@@ -298,13 +324,13 @@ else:
 
     worker_router_ids = list(range(num_workers))
     root_ejection_directory_ids = model.root_ejection_directory_ids(
-        root_ni_lanes
+        root_dir_lanes
     )
     destination_bits = (args.num_dirs - 1).bit_length()
 
     for i in range(num_workers):
         source_directory_id = root_ejection_directory_ids[
-            model.lane_for_worker(i, root_ni_lanes)
+            model.lane_for_worker(i, root_dir_lanes)
         ]
         cpus.append(SumcheckCausalTraffic(
             node_id=i,

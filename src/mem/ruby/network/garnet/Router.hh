@@ -122,6 +122,7 @@ class Router : public BasicRouter, public Consumer
 
     PortDirection getOutportDirection(int outport);
     PortDirection getInportDirection(int inport);
+    double getMeshOutportCongestion(int vnet);
 
     int route_compute(RouteInfo route, int inport, PortDirection direction);
     void grant_switch(int inport, flit *t_flit);

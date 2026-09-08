@@ -186,8 +186,10 @@ def init_network(options, network, InterfaceClass):
             network.entries_per_cluster = options.entries_per_cluster
         if hasattr(options, "num_clusters"):
             network.num_clusters = options.num_clusters
-        if hasattr(options, "entry_congestion_weight"):
-            network.entry_congestion_weight = options.entry_congestion_weight
+        if hasattr(options, "alpha"):
+            network.alpha = options.alpha
+        if hasattr(options, "beta"):
+            network.beta = options.beta
         if hasattr(options, "sumcheck_routing"):
             network.sumcheck_routing = options.sumcheck_routing
         if hasattr(options, "sumcheck_seed"):

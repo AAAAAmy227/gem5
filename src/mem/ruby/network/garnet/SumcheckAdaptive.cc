@@ -21,14 +21,16 @@ SumcheckAdaptive::SumcheckAdaptive(
     RoutingUnit *routingUnit,
     int entriesPerCluster,
     int meshRows,
-    double congestionWeight,
+    double alpha,
+    double beta,
     SumcheckRoutingMode mode,
     uint32_t seed)
     : m_router(router),
       m_routingUnit(routingUnit),
       m_entriesPerCluster(entriesPerCluster),
       m_meshRows(meshRows),
-      m_congestionWeight(congestionWeight),
+      m_alpha(alpha),
+      m_beta(beta),
       m_mode(mode),
       m_tiePointer(0),
       m_entryChoiceCounts(entriesPerCluster, 0),
@@ -132,7 +134,10 @@ SumcheckAdaptive::computeScore(int entryRouterId, int destWorker,
     int maxCredits = m_router->getVnetMaxCredits(candidateOutport, vnet);
 
     double congestion = 1.0 - (double)credits / (double)maxCredits;
-    return (double)dist + m_congestionWeight * congestion;
+    Router *entryRouter = m_router->get_net_ptr()->getRouter(entryRouterId);
+    double cong_entry_to_mesh = entryRouter->getMeshOutportCongestion(vnet);
+    return (double)dist + m_alpha * congestion
+           + m_beta * cong_entry_to_mesh;
 }
 
 int

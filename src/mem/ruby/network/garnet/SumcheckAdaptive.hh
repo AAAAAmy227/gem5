@@ -32,7 +32,8 @@ class SumcheckAdaptive
                      RoutingUnit *routingUnit,
                      int entriesPerCluster,
                      int meshRows,
-                     double congestionWeight,
+                     double alpha,
+                     double beta,
                      SumcheckRoutingMode mode,
                      uint32_t seed);
     AdaptiveEntryDecision chooseEntry(
@@ -52,7 +53,8 @@ class SumcheckAdaptive
     RoutingUnit *m_routingUnit;
     int m_entriesPerCluster;
     int m_meshRows;
-    double m_congestionWeight;
+    double m_alpha;
+    double m_beta;
     SumcheckRoutingMode m_mode;
 
     unsigned m_tiePointer;

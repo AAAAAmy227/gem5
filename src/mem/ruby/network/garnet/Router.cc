@@ -230,6 +230,25 @@ Router::getVnetMaxCredits(int outport, int vnet)
     return total;
 }
 
+double
+Router::getMeshOutportCongestion(int vnet)
+{
+    int sumCredits = 0;
+    int sumMaxCredits = 0;
+    int count = 0;
+    for (int op = 0; op < get_num_outports(); op++) {
+        std::string dir = getOutportDirection(op);
+        if (dir.rfind("Dim", 0) != 0)
+            continue;
+        int credits = getVnetCredits(op, vnet);
+        int maxCredits = getVnetMaxCredits(op, vnet);
+        sumCredits += credits;
+        sumMaxCredits += maxCredits;
+        count++;
+    }
+    return (count > 0) ? 1.0 - (double)sumCredits / (double)sumMaxCredits : 1.0;
+}
+
 void
 Router::regStats()
 {

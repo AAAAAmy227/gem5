@@ -76,7 +76,7 @@ RoutingUnit::RoutingUnit(Router *router, const GarnetRouterParams &p)
     if (p.topology == "SumcheckHierarchy") {
         m_sumcheck_adaptive = new SumcheckAdaptive(
             router, this, p.entries_per_cluster, p.mesh_rows,
-            p.entry_congestion_weight,
+            p.alpha, p.beta,
             p.sumcheck_routing == "fixed" ? MIN_SCORE_ : RANDOM_SCORE_,
             p.sumcheck_seed);
     } else {
