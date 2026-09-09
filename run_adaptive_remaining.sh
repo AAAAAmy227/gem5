@@ -25,9 +25,9 @@ extract_stats() {
     local nl=$(grep "average_packet_network_latency" "$stats" | awk '{print $2}')
     local la=$(grep "average_packet_latency" "$stats" | awk '{print $2}')
     local hp=$(grep "average_hops" "$stats" | awk '{print $2}')
-    local rr=$(grep "total_reroutes" "$stats" | awk '{print $2}')
-    local tc=$(grep "total_choices" "$stats" | awk '{print $2}')
-    local rt=$(grep "reroute_rate" "$stats" | awk '{print $2}')
+    local rr=$(grep "\.total_reroutes" "$stats" | awk '{print $2}')
+    local tc=$(grep "\.total_choices" "$stats" | awk '{print $2}')
+    local rt=$(grep "\.reroute_rate" "$stats" | awk '{print $2}')
     echo "$@,${ql:-NA},${nl:-NA},${la:-NA},${hp:-NA},${rr:-NA},${tc:-NA},${rt:-NA}" >> "$csv"
 }
 

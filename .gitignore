@@ -45,3 +45,5 @@ sumcheck_spec.md
 /experiments
 tests/pyunit
 /results_speedup
+results_adaptive
+results_entries

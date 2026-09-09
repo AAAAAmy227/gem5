@@ -174,6 +174,16 @@ SumcheckAdaptive::getRerouteCount()
     return m_rerouteCount;
 }
 
+int
+SumcheckAdaptive::getChoiceCount()
+{
+    int choiceCount = 0;
+    for (int entry = 0; entry < m_entriesPerCluster; entry++) {
+        choiceCount += m_entryChoiceCounts[entry];
+    }
+    return choiceCount;
+}
+
 }
 }
 }

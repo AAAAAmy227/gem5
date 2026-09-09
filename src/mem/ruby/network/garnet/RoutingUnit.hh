@@ -93,7 +93,7 @@ class RoutingUnit
     // Returns true if vnet is present in the vector
     // of vnets or if the vector supports all vnets.
     bool supportsVnet(int vnet, std::vector<int> sVnets);
-
+    SumcheckAdaptive* getSumcheckAdaptive() { return m_sumcheck_adaptive; }
 
   private:
     Router *m_router;

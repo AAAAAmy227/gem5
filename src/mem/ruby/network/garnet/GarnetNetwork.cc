@@ -44,6 +44,7 @@
 #include "mem/ruby/network/garnet/NetworkInterface.hh"
 #include "mem/ruby/network/garnet/NetworkLink.hh"
 #include "mem/ruby/network/garnet/Router.hh"
+#include "mem/ruby/network/garnet/SumcheckAdaptive.hh"
 #include "mem/ruby/system/RubySystem.hh"
 
 namespace gem5
@@ -601,6 +602,20 @@ GarnetNetwork::regStats()
             m_ctrl_traffic_distribution[source].push_back(ctrl_packets);
         }
     }
+
+    m_total_reroutes
+        .name(name() + ".total_reroutes")
+        .desc("Total flits that did not take the shortest path")
+        ;
+    m_total_choices
+        .name(name() + ".total_choices")
+        .desc("Total entry selection decisions")
+        ;
+    m_reroute_rate
+        .name(name() + ".reroute_rate")
+        .desc("Fraction of flits rerouted away from shortest path")
+        ;
+    m_reroute_rate = m_total_reroutes / m_total_choices;
 }
 
 void
@@ -632,6 +647,14 @@ GarnetNetwork::collateStats()
     // Ask the routers to collate their statistics
     for (int i = 0; i < m_routers.size(); i++) {
         m_routers[i]->collateStats();
+    }
+
+    for (int i = 0; i < m_routers.size(); i++) {
+        SumcheckAdaptive* sa = m_routers[i]->getRoutingUnit().getSumcheckAdaptive();
+        if (sa) {
+            m_total_reroutes += sa->getRerouteCount();
+            m_total_choices += sa->getChoiceCount();
+        }
     }
 }
 
