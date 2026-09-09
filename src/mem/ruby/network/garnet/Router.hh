@@ -101,6 +101,7 @@ class Router : public BasicRouter, public Consumer
     }
 
     GarnetNetwork* get_net_ptr()                    { return m_network_ptr; }
+    RoutingUnit& getRoutingUnit() { return routingUnit; }
 
     InputUnit*
     getInputUnit(unsigned port)

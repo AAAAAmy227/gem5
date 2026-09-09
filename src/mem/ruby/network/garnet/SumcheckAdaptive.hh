@@ -43,6 +43,7 @@ class SumcheckAdaptive
     void resetStats();
     int getEntryChoiceCount(int entryIdx);
     int getRerouteCount();
+    int getChoiceCount();
   
   private:
     double computeScore(int entryRouterId, int destWorker,

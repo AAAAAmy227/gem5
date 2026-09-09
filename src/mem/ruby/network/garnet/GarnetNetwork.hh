@@ -206,6 +206,10 @@ class GarnetNetwork : public Network
     std::vector<std::vector<statistics::Scalar *>> m_data_traffic_distribution;
     std::vector<std::vector<statistics::Scalar *>> m_ctrl_traffic_distribution;
 
+    statistics::Scalar m_total_reroutes;
+    statistics::Scalar m_total_choices;
+    statistics::Formula m_reroute_rate;
+
   private:
     GarnetNetwork(const GarnetNetwork& obj);
     GarnetNetwork& operator=(const GarnetNetwork& obj);

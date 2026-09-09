@@ -17,7 +17,7 @@ ALPHA_VALS=(0 0.5 1 2 4 8 16)
 BETA_VALS=(0 0.5 1 2 4 8 16)
 SMALL_SEEDS=(42 43 44)
 
-HEADER="topology,mesh_rows,num_clusters,src_placement,routing_mode,alpha,beta,seed,queueing_latency,network_latency,latency,avg_hops"
+HEADER="topology,mesh_rows,num_clusters,src_placement,routing_mode,alpha,beta,seed,queueing_latency,network_latency,latency,avg_hops,total_reroutes,total_choices,reroute_rate"
 
 extract_stats() {
     local csv="$1"; local stats="$2"; shift; shift
@@ -25,7 +25,10 @@ extract_stats() {
     local nl=$(grep "average_packet_network_latency" "$stats" | awk '{print $2}')
     local la=$(grep "average_packet_latency" "$stats" | awk '{print $2}')
     local hp=$(grep "average_hops" "$stats" | awk '{print $2}')
-    echo "$@,${ql:-NA},${nl:-NA},${la:-NA},${hp:-NA}" >> "$csv"
+    local rr=$(grep "\.total_reroutes" "$stats" | awk '{print $2}')
+    local tc=$(grep "\.total_choices" "$stats" | awk '{print $2}')
+    local rt=$(grep "\.reroute_rate" "$stats" | awk '{print $2}')
+    echo "$@,${ql:-NA},${nl:-NA},${la:-NA},${hp:-NA},${rr:-NA},${tc:-NA},${rt:-NA}" >> "$csv"
 }
 
 run_one() {
