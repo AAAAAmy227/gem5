@@ -40,7 +40,7 @@ for scale, df, title in CONFIGS:
         norm_vals = [1.0]
 
         for _, row in hier.iterrows():
-            labels.append(f"E={int(row['entries_per_cluster'])}")
+            labels.append(f"entries={int(row['entries_per_cluster'])}")
             abs_vals.append(row[metric])
             norm_vals.append(row[metric] / baseline)
 

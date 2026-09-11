@@ -62,8 +62,8 @@ BETA_VALS  = [0, 0.5, 1, 2, 4, 8, 16]
 COLORS = plt.cm.tab10(np.linspace(0, 1, len(ALPHA_VALS)))
 
 CONFIGS = [
-    ("small", small_hier, small_bl, "4×4×4 Hierarchy", "8×8 Mesh"),
-    ("large", large_hier, large_bl, "4×8×8 Hierarchy", "16×16 Mesh"),
+   ("small", small_hier, small_bl, "4×4×4 Hierarchy", "8×8 Mesh"),
+   ("large", large_hier, large_bl, "4×8×8 Hierarchy", "16×16 Mesh"),
 ]
 
 METRICS = [
@@ -136,6 +136,7 @@ for scale, hier, baseline, hier_label, mesh_label in CONFIGS:
 for scale, hier, _, hier_label, mesh_label in CONFIGS:
     fig, ax = plt.subplots(figsize=(9, 5.5))
 
+    # --- adaptive (solid lines) ---
     for i, alpha in enumerate(ALPHA_VALS):
         subset = hier[
             (hier["routing_mode"] == "adaptive") & (hier["alpha"] == alpha)
@@ -145,18 +146,27 @@ for scale, hier, _, hier_label, mesh_label in CONFIGS:
                     marker="o", markersize=5, linewidth=1.5,
                     color=COLORS[i], label=f"α={alpha}")
 
+    # --- fixed (dashed lines) ---
+    for i, alpha in enumerate(ALPHA_VALS):
+        subset = hier[
+            (hier["routing_mode"] == "fixed") & (hier["alpha"] == alpha)
+        ].sort_values("beta")
+        if not subset.empty and "reroute_rate" in subset.columns:
+            ax.plot(subset["beta"], subset["reroute_rate"],
+                    marker="s", markersize=4, linewidth=0.8,
+                    linestyle="--", color=COLORS[i], alpha=0.5)
+
     ax.set_xlabel("β")
     ax.set_ylabel("Reroute Rate")
     ax.set_xticks(BETA_VALS)
     ax.set_xlim(-0.5, 16.5)
     ax.grid(True, alpha=0.3)
 
-    vals = hier["reroute_rate"].dropna()
+    vals = hier[hier["routing_mode"].isin(["adaptive", "fixed"])]["reroute_rate"].dropna()
     if len(vals) > 0:
         ymin, ymax = vals.min(), vals.max()
         if ymax > ymin:
-            margin = (ymax - ymin) * 0.15
-            ax.set_ylim(ymin - margin, ymax + margin)
+            ax.set_ylim(max(0, ymin), ymax)
 
     ax.legend(fontsize=7, ncol=2, loc="best")
     ax.set_title(f"{hier_label} vs {mesh_label} — Reroute Rate")

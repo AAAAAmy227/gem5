@@ -1,3 +1,25 @@
+### =====  [Updated] How to run our experiments =====
+
+Our GitHub repo link: ``https://github.com/AAAAAmy227/gem5/tree/sumcheck-mini-structure``.
+
+Use the following command to compile, which may take several to tens of minutes. `NUMBER_BITS_PER_SET` is to allow more nodes required in our experiment.
+```
+scons build/NULL/gem5.opt PROTOCOL=Garnet_standalone NUMBER_BITS_PER_SET=1024 -j $(nproc)
+```
+
+We conduct $4$ experiments, regarding end-to-end speedup, impact of the number of entries, impact of adaptive routing parameters, and allocation of multiple NIs/Directories to the source node, respectively.
+
+For each experiment, first run its bash script to generate results in .csv form, then run the plotting script to obtain the figure.
+
+| Experiment | Bash Script | Result Directory | Plotting |
+|:----------|:-------|:------------|:---------|
+| 1. Speedup | `run_speedup.sh` | `results_speedup/` | `plot_speedup.py` |
+| 2. Number of entries | `run_entries_sweep.sh` | `results_entries/` | `plot_entries.py` |
+| 3. Adaptive routing parameters | `run_adaptive_sweep.sh` | `results_adaptive/` | `plot_adaptive.py` |
+| 4. Multiple NIs and Dirs | `run_multini.sh` | `results_multini/` | N/A |
+
+### =====  [Updates End Here] =====
+
 This is the gem5 simulator.
 
 The main website can be found at http://www.gem5.org

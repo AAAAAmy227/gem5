@@ -44,3 +44,5 @@ configs/dram/lowp_sweep.cfg
 sumcheck_spec.md
 results_adaptive
 results_entries
+results_multini
+results_speedup
